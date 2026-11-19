@@ -1,0 +1,119 @@
+{
+  "pages": [
+    {
+      "path": "pages/index/index",
+      "style": {
+        "navigationBarTitleText": "出入量工作台",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/auth/login",
+      "style": {
+        "navigationBarTitleText": "登录",
+        "navigationBarBackgroundColor": "#ffffff",
+        "navigationBarTextStyle": "black"
+      }
+    },
+    {
+      "path": "pages/auth/bind",
+      "style": {
+        "navigationBarTitleText": "身份绑定核验",
+        "navigationBarBackgroundColor": "#1677ff",
+        "navigationBarTextStyle": "white"
+      }
+    },
+    {
+      "path": "pages/nurse/list",
+      "style": {
+        "navigationBarTitleText": "科室护士管理",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/nurse/assign",
+      "style": {
+        "navigationBarTitleText": "分配责任床位"
+      }
+    },
+    {
+      "path": "pages/patient/detail",
+      "style": {
+        "navigationBarTitleText": "病人出入量详情",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/record/intake",
+      "style": {
+        "navigationBarTitleText": "记录入量",
+        "backgroundColor": "#f8f9fa"
+      }
+    },
+    {
+      "path": "pages/record/output",
+      "style": {
+        "navigationBarTitleText": "记录出量",
+        "backgroundColor": "#f8f9fa"
+      }
+    },
+    {
+      "path": "pages/stats/daily",
+      "style": {
+        "navigationBarTitleText": "出入平衡分析",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/patient-view/home",
+      "style": {
+        "navigationBarTitleText": "我的出入量",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/mine/mine",
+      "style": {
+        "navigationBarTitleText": "个人中心"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "出入量记录助手",
+    "navigationBarBackgroundColor": "#1677ff",
+    "backgroundColor": "#f5f7fa"
+  },
+  "tabBar": {
+    "color": "#8c8c8c",
+    "selectedColor": "#1677ff",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/index/index",
+        "text": "病房工作台",
+        "iconPath": "static/tabbar/tab-home.png",
+        "selectedIconPath": "static/tabbar/tab-home-active.png"
+      },
+      {
+        "pagePath": "pages/stats/daily",
+        "text": "平衡统计",
+        "iconPath": "static/tabbar/tab-stats.png",
+        "selectedIconPath": "static/tabbar/tab-stats-active.png"
+      },
+      {
+        "pagePath": "pages/patient-view/home",
+        "text": "患者端",
+        "iconPath": "static/tabbar/tab-patient.png",
+        "selectedIconPath": "static/tabbar/tab-patient-active.png"
+      },
+      {
+        "pagePath": "pages/mine/mine",
+        "text": "我的",
+        "iconPath": "static/tabbar/tab-mine.png",
+        "selectedIconPath": "static/tabbar/tab-mine-active.png"
+      }
+    ]
+  }
+}
