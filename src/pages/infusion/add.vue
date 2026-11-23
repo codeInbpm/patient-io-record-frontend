@@ -45,19 +45,26 @@
         <view class="item-label"><text class="required">*</text>给药用法</view>
         <view class="preset-chips">
           <view
-            v-for="u in ['ivg', 'ibn', 'iv drip', '维持液']"
+            v-for="u in ['ivg', 'ibn']"
             :key="u"
-            :class="['chip', form.usageType === u ? 'active' : '']"
-            @tap="form.usageType = u"
+            :class="['chip', !isCustomUsage && form.usageType === u ? 'active' : '']"
+            @tap="selectUsage(u)"
           >
             {{ u }}
           </view>
+          <view
+            :class="['chip', isCustomUsage ? 'active' : '']"
+            @tap="selectCustomUsage"
+          >
+            自定义
+          </view>
         </view>
         <input
-          v-if="!['ivg', 'ibn', 'iv drip', '维持液'].includes(form.usageType)"
+          v-if="isCustomUsage"
           class="input-box custom-usage"
-          v-model="form.usageType"
-          placeholder="自定义给药途径"
+          v-model="customUsageInput"
+          placeholder="请输入自定义给药途径 (如: 泵入、皮下等)"
+          @input="onCustomUsageInput"
         />
       </view>
 
@@ -141,6 +148,8 @@ import { getPatientDetailApi } from '../../api/patient'
 const patientInfo = ref(null)
 const submitting = ref(false)
 const isCustomCapacity = ref(false)
+const isCustomUsage = ref(false)
+const customUsageInput = ref('')
 
 const startTimeStr = ref('')
 const endTimeStr = ref('')
@@ -161,6 +170,10 @@ const pad = (n) => (n < 10 ? '0' + n : n)
 const getTodayDateStr = () => {
   const d = new Date()
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+const formatDateTime = (d) => {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 onLoad((options) => {
@@ -206,6 +219,21 @@ const selectCapacity = (cap) => {
   autoCalcEndTime()
 }
 
+const selectUsage = (u) => {
+  isCustomUsage.value = false
+  form.usageType = u
+}
+
+const selectCustomUsage = () => {
+  isCustomUsage.value = true
+  form.usageType = customUsageInput.value.trim()
+}
+
+const onCustomUsageInput = (e) => {
+  const val = (e.detail?.value !== undefined ? e.detail.value : customUsageInput.value) || ''
+  form.usageType = val.trim()
+}
+
 const autoCalcEndTime = () => {
   let minutes = 90
   if (form.capacity <= 100) minutes = 45
@@ -213,23 +241,21 @@ const autoCalcEndTime = () => {
   else if (form.capacity <= 500) minutes = 150
   else minutes = 240
 
-  const now = new Date()
-  const [h, m] = startTimeStr.value.split(':').map(Number)
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0)
+  const [h, m] = (startTimeStr.value || '00:00').split(':').map(Number)
+  const [sYear, sMonth, sDay] = (form.startTime ? form.startTime.split(' ')[0] : getTodayDateStr()).split('-').map(Number)
+  const start = new Date(sYear, sMonth - 1, sDay, h, m, 0)
   const end = new Date(start.getTime() + minutes * 60 * 1000)
 
   endTimeStr.value = `${pad(end.getHours())}:${pad(end.getMinutes())}`
-  form.estimatedEndTime = `${getTodayDateStr()} ${endTimeStr.value}:00`
+  form.estimatedEndTime = formatDateTime(end)
 }
 
 const adjustMinutes = (mins) => {
-  const now = new Date()
-  const [h, m] = endTimeStr.value.split(':').map(Number)
-  const currentEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0)
-  const newEnd = new Date(currentEnd.getTime() + mins * 60 * 1000)
+  const base = form.estimatedEndTime ? new Date(form.estimatedEndTime.replace(/-/g, '/')) : new Date()
+  const newEnd = new Date(base.getTime() + mins * 60 * 1000)
 
   endTimeStr.value = `${pad(newEnd.getHours())}:${pad(newEnd.getMinutes())}`
-  form.estimatedEndTime = `${getTodayDateStr()} ${endTimeStr.value}:00`
+  form.estimatedEndTime = formatDateTime(newEnd)
 }
 
 const onStartTimeChange = (e) => {
@@ -240,7 +266,17 @@ const onStartTimeChange = (e) => {
 
 const onEndTimeChange = (e) => {
   endTimeStr.value = e.detail.value
-  form.estimatedEndTime = `${getTodayDateStr()} ${endTimeStr.value}:00`
+  const [sDate, sTime] = (form.startTime || `${getTodayDateStr()} 00:00:00`).split(' ')
+  const [sYear, sMonth, sDay] = sDate.split('-').map(Number)
+  const [sHour, sMinute] = sTime.split(':').map(Number)
+  const [eHour, eMinute] = endTimeStr.value.split(':').map(Number)
+
+  const estDate = new Date(sYear, sMonth - 1, sDay, eHour, eMinute, 0)
+  // 如果拔针时分小于开始时分，说明跨天到次日
+  if (eHour < sHour || (eHour === sHour && eMinute < sMinute)) {
+    estDate.setDate(estDate.getDate() + 1)
+  }
+  form.estimatedEndTime = formatDateTime(estDate)
 }
 
 const chooseAndUpload = () => {

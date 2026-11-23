@@ -188,7 +188,7 @@
         </view>
         <view class="tags-wrap" v-if="pipes[p.key] && pipes[p.key].length > 0">
           <view class="chip" v-for="(item, idx) in pipes[p.key]" :key="idx">
-            {{ item.bedNo }} {{ item.patientName }}
+            {{ item.bedNo }} {{ item.patientName }}<text v-if="item.drug || item.time" style="font-size: 22rpx; margin-left: 6rpx; color: #0958d9;">({{ [item.time, item.drug].filter(Boolean).join(' ') }})</text>
             <text class="close-x" v-if="canEdit" @tap="pipes[p.key].splice(idx, 1)">×</text>
           </view>
         </view>
@@ -220,7 +220,19 @@
 
         <!-- 第二步：数值录入 -->
         <view class="picker-sub" style="margin-top: 24rpx;" v-if="pickerType !== 'pipe' && pickerType !== 'leave'">第二步：输入数值</view>
+        <view class="picker-sub selected-tip" style="margin-top: 24rpx;" v-else-if="currentPipeKey === 'maint'">第二步：录入用药信息 (已选中 {{ selectedPatient?.bedNo }} {{ selectedPatient?.patientName }})</view>
         <view class="picker-sub selected-tip" style="margin-top: 24rpx;" v-else>第二步：已选中 {{ selectedPatient?.bedNo }} {{ selectedPatient?.patientName }}</view>
+
+        <!-- 维持液用药信息 -->
+        <view v-if="pickerType === 'pipe' && currentPipeKey === 'maint'" class="input-row-col">
+          <picker mode="time" :value="maintFluidTime" @change="(e) => maintFluidTime = e.detail.value">
+            <view class="picker-trigger-box">
+              <text class="picker-t-label">用药时间 (几点用药):</text>
+              <text class="picker-t-val">{{ maintFluidTime }} ▾</text>
+            </view>
+          </picker>
+          <input class="val-input" v-model="maintFluidDrug" placeholder="具体用的什么药 (如: 0.9%氯化钠250ml+氯化钾)" style="margin-top: 14rpx;" />
+        </view>
 
         <!-- 体温快捷 (33-45°C) -->
         <view v-if="pickerType === 'temp'" class="input-row">
@@ -418,6 +430,8 @@ const sugarVal = ref('10.5')
 const urineVal = ref('200')
 const laxativeTime = ref('14:00')
 const laxativeName = ref('复方聚乙二醇')
+const maintFluidTime = ref('14:00')
+const maintFluidDrug = ref('')
 
 // 交班提交弹窗状态
 const showSubmitModal = ref(false)
@@ -535,6 +549,11 @@ const openQuickPicker = (type, pipeKey = '', pipeName = '') => {
   if (type === 'pipe') {
     currentPipeKey = pipeKey
     currentPickerTitle.value = `登记【${pipeName}】病患`
+    if (pipeKey === 'maint') {
+      const now = new Date()
+      maintFluidTime.value = `${pad(now.getHours())}:${pad(now.getMinutes())}`
+      maintFluidDrug.value = ''
+    }
   } else if (type === 'leave') currentPickerTitle.value = '请假病患登记'
   else if (type === 'temp') currentPickerTitle.value = '异常体温登记'
   else if (type === 'laxative') currentPickerTitle.value = '泻药服用登记'
@@ -557,11 +576,23 @@ const confirmQuickAdd = () => {
 
   if (pickerType.value === 'pipe' && currentPipeKey) {
     const list = pipes[currentPipeKey] || []
-    if (list.some(i => i.patientId === base.patientId)) {
-      uni.showToast({ title: '该病患已在列表中', icon: 'none' })
-      return
+    if (currentPipeKey === 'maint') {
+      if (!maintFluidDrug.value.trim()) {
+        uni.showToast({ title: '请输入使用的药品名称', icon: 'none' })
+        return
+      }
+      list.push({
+        ...base,
+        drug: maintFluidDrug.value.trim(),
+        time: maintFluidTime.value || ''
+      })
+    } else {
+      if (list.some(i => i.patientId === base.patientId)) {
+        uni.showToast({ title: '该病患已在列表中', icon: 'none' })
+        return
+      }
+      list.push(base)
     }
-    list.push(base)
   } else if (pickerType.value === 'leave') {
     if (leaveList.value.some(i => i.patientId === base.patientId)) {
       uni.showToast({ title: '该病患已在请假列表', icon: 'none' })
@@ -1170,6 +1201,27 @@ const handleSign = async () => {
 .input-row-col {
   display: flex;
   flex-direction: column;
+}
+
+.picker-trigger-box {
+  background: #f5f7fa;
+  height: 72rpx;
+  border-radius: 8rpx;
+  padding: 0 16rpx;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.picker-t-label {
+  font-size: 26rpx;
+  color: #595959;
+}
+
+.picker-t-val {
+  font-size: 28rpx;
+  color: #1677ff;
+  font-weight: 500;
 }
 
 .picker-actions {

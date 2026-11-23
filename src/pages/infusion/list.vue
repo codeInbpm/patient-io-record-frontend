@@ -292,14 +292,27 @@
             <text class="modal-label required">给药途径 / 用法 *</text>
             <view class="chip-group">
               <view
-                v-for="u in ['ivg', 'ibn', 'iv drip', '维持液']"
+                v-for="u in ['ivg', 'ibn']"
                 :key="u"
-                :class="['val-chip', addForm.usageType === u ? 'active' : '']"
-                @tap="addForm.usageType = u"
+                :class="['val-chip', !isCustomUsage && addForm.usageType === u ? 'active' : '']"
+                @tap="selectAddUsage(u)"
               >
                 {{ u }}
               </view>
+              <view
+                :class="['val-chip', isCustomUsage ? 'active' : '']"
+                @tap="selectCustomAddUsage"
+              >
+                自定义
+              </view>
             </view>
+            <input
+              v-if="isCustomUsage"
+              class="modal-input mt-10"
+              v-model="customUsageInput"
+              placeholder="输入自定义给药途径/用法 (如: 泵入、皮下等)"
+              @input="onCustomUsageInput"
+            />
           </view>
 
           <!-- 5. 开始时间与预计拔针时间 -->
@@ -378,6 +391,8 @@ const showAddModal = ref(false)
 const addSubmitting = ref(false)
 const inBedPatients = ref([])
 const isCustomCap = ref(false)
+const isCustomUsage = ref(false)
+const customUsageInput = ref('')
 const addStartTimeStr = ref('')
 const addEndTimeStr = ref('')
 const addImages = ref([])
@@ -396,6 +411,10 @@ const pad = (n) => (n < 10 ? '0' + n : n)
 const getTodayDateStr = () => {
   const d = new Date()
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+const formatDateTime = (d) => {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 const timeoutCount = computed(() => {
@@ -474,6 +493,8 @@ const openAddModal = () => {
   addForm.remark = ''
   addForm.syncToIntake = true
   isCustomCap.value = false
+  isCustomUsage.value = false
+  customUsageInput.value = ''
   addImages.value = []
 
   if (inBedPatients.value.length > 0) {
@@ -493,6 +514,21 @@ const selectAddCapacity = (cap) => {
   calcAddEndTime()
 }
 
+const selectAddUsage = (u) => {
+  isCustomUsage.value = false
+  addForm.usageType = u
+}
+
+const selectCustomAddUsage = () => {
+  isCustomUsage.value = true
+  addForm.usageType = customUsageInput.value.trim()
+}
+
+const onCustomUsageInput = (e) => {
+  const val = (e.detail?.value !== undefined ? e.detail.value : customUsageInput.value) || ''
+  addForm.usageType = val.trim()
+}
+
 const calcAddEndTime = () => {
   let minutes = 90
   if (addForm.capacity <= 100) minutes = 45
@@ -500,13 +536,13 @@ const calcAddEndTime = () => {
   else if (addForm.capacity <= 500) minutes = 150
   else minutes = 240
 
-  const now = new Date()
-  const [h, m] = addStartTimeStr.value.split(':').map(Number)
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0)
+  const [h, m] = (addStartTimeStr.value || '00:00').split(':').map(Number)
+  const [sYear, sMonth, sDay] = (addForm.startTime ? addForm.startTime.split(' ')[0] : getTodayDateStr()).split('-').map(Number)
+  const start = new Date(sYear, sMonth - 1, sDay, h, m, 0)
   const end = new Date(start.getTime() + minutes * 60 * 1000)
 
   addEndTimeStr.value = `${pad(end.getHours())}:${pad(end.getMinutes())}`
-  addForm.estimatedEndTime = `${getTodayDateStr()} ${addEndTimeStr.value}:00`
+  addForm.estimatedEndTime = formatDateTime(end)
 }
 
 const onAddStartTimeChange = (e) => {
@@ -517,7 +553,17 @@ const onAddStartTimeChange = (e) => {
 
 const onAddEndTimeChange = (e) => {
   addEndTimeStr.value = e.detail.value
-  addForm.estimatedEndTime = `${getTodayDateStr()} ${addEndTimeStr.value}:00`
+  const [sDate, sTime] = (addForm.startTime || `${getTodayDateStr()} 00:00:00`).split(' ')
+  const [sYear, sMonth, sDay] = sDate.split('-').map(Number)
+  const [sHour, sMinute] = sTime.split(':').map(Number)
+  const [eHour, eMinute] = addEndTimeStr.value.split(':').map(Number)
+
+  const estDate = new Date(sYear, sMonth - 1, sDay, eHour, eMinute, 0)
+  // 如果拔针时分小于开始时分，说明跨天到次日
+  if (eHour < sHour || (eHour === sHour && eMinute < sMinute)) {
+    estDate.setDate(estDate.getDate() + 1)
+  }
+  addForm.estimatedEndTime = formatDateTime(estDate)
 }
 
 // 拍照上传药袋图片
@@ -553,6 +599,10 @@ const submitAddInfusion = async () => {
   }
   if (!addForm.remark.trim()) {
     uni.showToast({ title: '请填写补液药物名称', icon: 'none' })
+    return
+  }
+  if (!addForm.usageType || !addForm.usageType.trim()) {
+    uni.showToast({ title: '请选择或输入给药途径', icon: 'none' })
     return
   }
 
