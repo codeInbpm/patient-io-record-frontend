@@ -11,6 +11,16 @@ export function getManageNursesApi() {
 }
 
 /**
+ * 获取在职护士选项列表（免护士长鉴权，用于交接班选择接班护士等）
+ */
+export function getNurseOptionsApi(wardId) {
+  return request({
+    url: '/v1/nurses/options' + (wardId ? `?wardId=${wardId}` : ''),
+    method: 'GET'
+  })
+}
+
+/**
  * 护士长保存护士（新增或编辑）
  */
 export function saveNurseApi(data) {

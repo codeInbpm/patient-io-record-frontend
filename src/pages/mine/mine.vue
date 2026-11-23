@@ -92,6 +92,30 @@
         <text class="m-arrow">›</text>
       </view>
 
+      <!-- 每日特殊交接班登记簿（责任护士 / 护士长） -->
+      <view class="menu-item" v-if="userStore.isHeadNurse || userStore.isNurse" @tap="goToSpecialHandover">
+        <text class="m-icon">📋</text>
+        <text class="m-text">每日特殊交接班簿</text>
+        <text class="m-sub">当班填报 / 今日数据</text>
+        <text class="m-arrow">›</text>
+      </view>
+
+      <!-- 特殊交接班历史清册（责任护士 / 护士长） -->
+      <view class="menu-item" v-if="userStore.isHeadNurse || userStore.isNurse" @tap="goToHandoverHistory">
+        <text class="m-icon">🗂️</text>
+        <text class="m-text">特殊交接班历史清册</text>
+        <text class="m-sub">按病区/个人查阅与接班</text>
+        <text class="m-arrow">›</text>
+      </view>
+
+      <!-- 患者补液监护管理（责任护士 / 护士长） -->
+      <view class="menu-item" v-if="userStore.isHeadNurse || userStore.isNurse" @tap="goToInfusion">
+        <text class="m-icon">💧</text>
+        <text class="m-text">患者补液监护管理</text>
+        <text class="m-sub">补液登记 / 拔针确认</text>
+        <text class="m-arrow">›</text>
+      </view>
+
       <view class="menu-item" v-if="userStore.isHeadNurse" @tap="goToStats">
         <text class="m-icon">📊</text>
         <text class="m-text">全科室每日出入平衡分析</text>
@@ -656,6 +680,18 @@ function goToIndex() {
 
 function goToStats() {
   uni.switchTab({ url: '/pages/stats/daily' })
+}
+
+function goToSpecialHandover() {
+  uni.navigateTo({ url: '/pages/handover/special-record' })
+}
+
+function goToHandoverHistory() {
+  uni.navigateTo({ url: '/pages/handover/history' })
+}
+
+function goToInfusion() {
+  uni.navigateTo({ url: '/pages/infusion/list' })
 }
 
 function goToPatientHome() {

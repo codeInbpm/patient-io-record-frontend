@@ -30,6 +30,18 @@
           <text class="stat-label">异常报警</text>
         </view>
       </view>
+
+      <!-- 快捷入口金刚区：补液监护 & 每日特殊交接本 -->
+      <view class="quick-feature-bar">
+        <view class="feature-capsule" @tap="goToInfusionList">
+          <text class="capsule-icon">💧</text>
+          <text class="capsule-text">补液监护</text>
+        </view>
+        <view class="feature-capsule handover" @tap="goToSpecialHandover">
+          <text class="capsule-icon">📋</text>
+          <text class="capsule-text">特殊交接本</text>
+        </view>
+      </view>
     </view>
 
     <!-- 护士长专属管理操作栏 -->
@@ -165,6 +177,13 @@
             @tap="handleCardRecord(p, 'output')"
           >
             + 记出量
+          </button>
+          <button 
+            :class="['quick-btn', 'infusion', (p.isMyDuty || userStore.isHeadNurse) ? '' : 'btn-disabled']" 
+            size="mini" 
+            @tap="handleCardInfusion(p)"
+          >
+            + 记补液
           </button>
           <button class="quick-btn view" size="mini" @tap="goToDetail(p.id)">流水详情</button>
           <button 
@@ -812,6 +831,38 @@ function handleCardRecord(p, type) {
     return
   }
   goToRecord(p.id, type)
+}
+
+function goToInfusionList() {
+  uni.navigateTo({
+    url: '/pages/infusion/list'
+  })
+}
+
+function goToSpecialHandover() {
+  uni.navigateTo({
+    url: '/pages/handover/special-record'
+  })
+}
+
+function handleCardInfusion(p) {
+  if (!p.isMyDuty && !userStore.isHeadNurse) {
+    uni.showModal({
+      title: '非当班管辖床位',
+      content: `您当前未管辖【${p.bedNo} - ${p.patientName}】，无法为其登记补液！如需登记，请在顶部点击【选择床位】认领。`,
+      confirmText: '去认领床位',
+      cancelText: '取消',
+      success: (res) => {
+        if (res.confirm) {
+          openDutyBedModal()
+        }
+      }
+    })
+    return
+  }
+  uni.navigateTo({
+    url: `/pages/infusion/add?patientId=${p.id}&bedNo=${encodeURIComponent(p.bedNo)}&patientName=${encodeURIComponent(p.patientName)}&hospitalNo=${p.hospitalNo || ''}`
+  })
 }
 
 // 打开仿 Pad 端选择管辖床位弹窗
@@ -1490,6 +1541,45 @@ onPullDownRefresh(async () => {
   background: #fffbe6;
   color: #fa8c16;
   border: 1px solid #fa8c16;
+}
+
+.quick-btn.infusion {
+  background: #e6fffb;
+  color: #13c2c2;
+  border: 1px solid #13c2c2;
+}
+
+.quick-feature-bar {
+  display: flex;
+  gap: 16rpx;
+  margin-top: 16rpx;
+  padding-top: 16rpx;
+  border-top: 1rpx solid rgba(255, 255, 255, 0.2);
+}
+
+.feature-capsule {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 30rpx;
+  padding: 10rpx 0;
+}
+
+.feature-capsule.handover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.capsule-icon {
+  font-size: 28rpx;
+  margin-right: 8rpx;
+}
+
+.capsule-text {
+  font-size: 26rpx;
+  color: #ffffff;
+  font-weight: 500;
 }
 
 .quick-btn.view {

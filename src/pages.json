@@ -76,6 +76,37 @@
       "style": {
         "navigationBarTitleText": "个人中心"
       }
+    },
+    {
+      "path": "pages/infusion/add",
+      "style": {
+        "navigationBarTitleText": "登记患者补液",
+        "backgroundColor": "#f5f7fa"
+      }
+    },
+    {
+      "path": "pages/infusion/list",
+      "style": {
+        "navigationBarTitleText": "正在补液监护",
+        "enablePullDownRefresh": true,
+        "backgroundColor": "#f5f7fa"
+      }
+    },
+    {
+      "path": "pages/handover/special-record",
+      "style": {
+        "navigationBarTitleText": "每日交接班特殊记录",
+        "enablePullDownRefresh": true,
+        "backgroundColor": "#f5f7fa"
+      }
+    },
+    {
+      "path": "pages/handover/history",
+      "style": {
+        "navigationBarTitleText": "特殊交接班历史清册",
+        "enablePullDownRefresh": true,
+        "backgroundColor": "#f4f6fa"
+      }
     }
   ],
   "globalStyle": {
