@@ -101,13 +101,22 @@
         <text class="checkbox-text">自动记入今日入量 (静脉补液: {{ form.capacity || 0 }}ml)</text>
       </view>
 
-      <!-- 补液药物与说明 -->
+      <!-- 补液药物：从字典选择，避免手打错字 -->
       <view class="form-item">
-        <view class="item-label"><text class="required">*</text>补液药物名称 / 规格说明</view>
-        <textarea
-          class="textarea-box"
+        <view class="item-label">
+          <text class="required">*</text>补液药物
+          <text class="sub-label">从字典选择，支持拼音首字母</text>
+        </view>
+        <DrugPicker v-model="form.drugs" :max="5" :route="form.usageType" />
+      </view>
+
+      <!-- 备注：滴速等补充说明 -->
+      <view class="form-item">
+        <view class="item-label">备注（可选）</view>
+        <input
+          class="input-box"
           v-model="form.remark"
-          placeholder="如: 0.9%氯化钠注射液250ml + 注射用头孢曲松钠2.0g，静滴40滴/分"
+          placeholder="如：静滴 40 滴/分"
         />
       </view>
 
@@ -144,6 +153,7 @@ import { ref, reactive } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { createInfusionApi, uploadInfusionImageApi } from '../../api/infusion'
 import { getPatientDetailApi } from '../../api/patient'
+import DrugPicker from '../../components/DrugPicker.vue'
 
 const patientInfo = ref(null)
 const submitting = ref(false)
@@ -161,6 +171,7 @@ const form = reactive({
   usageType: 'ivg',
   startTime: '',
   estimatedEndTime: '',
+  drugs: [],
   remark: '',
   syncToIntake: true
 })
@@ -333,11 +344,24 @@ const handleSubmit = async () => {
     uni.showToast({ title: '请选择给药用法', icon: 'none' })
     return
   }
+  if (!form.drugs || !form.drugs.length) {
+    uni.showToast({ title: '请从字典选择补液药物', icon: 'none' })
+    return
+  }
 
   submitting.value = true
   try {
     const payload = {
       ...form,
+      drugs: form.drugs.map((d) => ({
+        id: d.id || null,
+        name: d.name,
+        spec: d.spec || '',
+        unit: d.unit || '',
+        highAlert: d.highAlert || 0,
+        manual: !!d.manual
+      })),
+      remark: (form.remark || '').trim(),
       imageUrls: uploadedImages.value
     }
     await createInfusionApi(payload)

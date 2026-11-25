@@ -19,17 +19,17 @@
       </view>
 
       <view class="stats-row" v-if="overview">
-        <view class="stat-item clickable" @tap="patientFilterScope = userStore.isHeadNurse ? 'all' : 'my'">
-          <text class="stat-num">{{ allPatientsCount }}</text>
-          <text class="stat-label">{{ userStore.isHeadNurse ? '病区总病患' : (patientFilterScope === 'my' ? '我负责病患' : '全部病患') }}</text>
+        <view class="stat-item clickable" @tap="toggleHeaderScope">
+          <text class="stat-num">{{ headerPatientCount }}</text>
+          <text class="stat-label">{{ headerPatientLabel }}</text>
         </view>
         <view class="stat-item">
-          <text class="stat-num color-in">{{ overview.wardTotalIntake || 0 }}</text>
-          <text class="stat-label">今日总入(ml)</text>
+          <text class="stat-num color-in">{{ headerIntake }}</text>
+          <text class="stat-label">{{ isWardScope ? '今日总入(ml)' : '我负责入(ml)' }}</text>
         </view>
         <view class="stat-item">
-          <text class="stat-num color-out">{{ overview.wardTotalOutput || 0 }}</text>
-          <text class="stat-label">今日总出(ml)</text>
+          <text class="stat-num color-out">{{ headerOutput }}</text>
+          <text class="stat-label">{{ isWardScope ? '今日总出(ml)' : '我负责出(ml)' }}</text>
         </view>
         <view class="stat-item clickable" @tap="patientFilterScope = 'abnormal'">
           <text class="stat-num color-danger">{{ overview.abnormalCount || 0 }}</text>
@@ -40,15 +40,15 @@
       <!-- 漏记哨兵：没有数据，整个系统就没有价值，这条必须最显眼 -->
       <view class="missed-banner" v-if="missedPatientsCount > 0" @tap="toggleMissedFilter">
         <text class="missed-icon">⏰</text>
-        <text class="missed-text">{{ missedPatientsCount }} 位患者超过 4 小时未记录</text>
+        <text class="missed-text">{{ missedBannerText }}</text>
         <text class="missed-action">{{ patientFilterScope === 'missed' ? '取消筛选' : '查看名单 ›' }}</text>
       </view>
 
-      <!-- 患者说记错了：不处理就等于把错误数据当成真的 -->
+      <!-- 患者反馈：数据错了要核对，症状上报更要立刻看 -->
       <view class="correction-banner" v-if="correctionList.length > 0" @tap="showCorrectionModal = true">
-        <text class="correction-icon">📝</text>
-        <text class="correction-text">{{ correctionList.length }} 条记录患者说记错了</text>
-        <text class="correction-action">去核对 ›</text>
+        <text class="correction-icon">{{ symptomCount > 0 ? '⚠️' : '📝' }}</text>
+        <text class="correction-text">{{ correctionBannerText }}</text>
+        <text class="correction-action">去处理 ›</text>
       </view>
 
       <!-- 弱网离线队列：让护士知道记录没有丢 -->
@@ -236,7 +236,7 @@
         </view>
         <view class="empty-alert-box" v-else-if="patientFilterScope === 'missed'">
           <text class="empty-alert-icon">✅</text>
-          <text class="empty-alert-title">全部患者 4 小时内均有记录</text>
+          <text class="empty-alert-title">{{ userStore.isHeadNurse ? '全部患者' : '我管辖的患者' }} 4 小时内均有记录</text>
           <text class="empty-alert-desc">当前没有需要补记的患者</text>
           <button class="m-btn small primary back-all-btn" @tap="patientFilterScope = userStore.isHeadNurse ? 'all' : 'my'">返回查看病患列表</button>
         </view>
@@ -511,26 +511,48 @@
     <view class="modal-mask" v-if="showCorrectionModal" @tap="showCorrectionModal = false">
       <view class="correction-modal" @tap.stop>
         <view class="cm-head">
-          <text class="cm-title">待核对记录 ({{ correctionList.length }})</text>
+          <text class="cm-title">待处理 ({{ correctionList.length }})</text>
           <text class="cm-close" @tap="showCorrectionModal = false">✕</text>
         </view>
+        <view class="cm-tip">症状上报请到床边看；记录说记错的，点「确认无误」或「驳回」——驳回会从今天的出入量里移除，患者重新记。</view>
         <scroll-view scroll-y class="cm-body">
-          <view class="cm-item" v-for="c in correctionList" :key="c.id">
+          <view
+            class="cm-item"
+            :class="{ 'cm-sym': c.category === 'SYMPTOM' }"
+            v-for="c in correctionList"
+            :key="c.id"
+            @tap="onCorrectionTap(c)"
+          >
             <view class="cm-line1">
               <text class="cm-bed">{{ c.bedNo }}</text>
               <text class="cm-name">{{ c.patientName }}</text>
+              <text class="cm-sym-tag" v-if="c.category === 'SYMPTOM'">症状上报</text>
               <text class="cm-time">{{ (c.recordTime || '').substring(11, 16) }}</text>
             </view>
-            <view class="cm-line2">
-              {{ c.category === 'INTAKE' ? '喝的' : '排的' }} {{ c.amount }}ml · {{ c.itemName }}
-            </view>
-            <view class="cm-reason">患者说：{{ c.reason || '没说明原因' }}</view>
-            <view class="cm-actions">
-              <text class="cm-btn ghost" @tap="dismissCorrection(c)">确认无误</text>
-              <text class="cm-btn primary" @tap="goFixCorrection(c)">去修改 ›</text>
-            </view>
+
+            <!-- 症状：没有对错可判断，给一个「知道了」就收口 -->
+            <template v-if="c.category === 'SYMPTOM'">
+              <view class="cm-line2">{{ c.itemName }}<text v-if="c.amount"> · {{ c.amount }}ml</text></view>
+              <view class="cm-reason strong">患者自己上报的，请到床边看一下</view>
+              <view class="cm-actions" @tap.stop>
+                <text class="cm-btn primary" @tap.stop="dismissCorrection(c)">知道了</text>
+              </view>
+            </template>
+
+            <!-- 记错了：护士只判断，不代改 -->
+            <template v-else>
+              <view class="cm-line2">
+                {{ c.category === 'INTAKE' ? '喝的' : '排的' }} {{ c.amount }}ml · {{ c.itemName }}
+              </view>
+              <view class="cm-reason">患者说：{{ c.reason || '没说明原因' }}</view>
+              <view class="cm-look">看这条的上下文 ›</view>
+              <view class="cm-actions" @tap.stop>
+                <text class="cm-btn ghost" @tap.stop="rejectCorrection(c)">驳回，让患者重记</text>
+                <text class="cm-btn primary" @tap.stop="dismissCorrection(c)">确认无误</text>
+              </view>
+            </template>
           </view>
-          <view class="cm-empty" v-if="correctionList.length === 0">暂无待核对记录</view>
+          <view class="cm-empty" v-if="correctionList.length === 0">暂无待处理</view>
         </scroll-view>
       </view>
     </view>
@@ -631,14 +653,14 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
+import { onPullDownRefresh, onShow, onHide, onUnload } from '@dcloudio/uni-app'
 import { useUserStore } from '../../stores/user'
 import { getWardsApi, getWardOverviewApi, createWardApi } from '../../api/ward'
 import { getBedsByWardApi, createBedApi } from '../../api/bed'
 import { getPatientsApi, createPatientApi, assignNurseApi, dischargePatientApi } from '../../api/patient'
 import { getActiveNursesApi } from '../../api/auth'
 import { getMyAssignmentsApi, claimMyDutyBedsApi } from '../../api/nurse'
-import { getCorrectionRequestsApi, handleCorrectionRequestApi } from '../../api/record'
+import { getCorrectionRequestsApi, handleCorrectionRequestApi, rejectCorrectionRequestApi } from '../../api/record'
 import { formatDate, formatSinceLastRecord } from '../../utils/date'
 import { syncRoleTabBar } from '../../utils/tabbar'
 import { queueCount, flushQueue } from '../../utils/offline'
@@ -658,32 +680,100 @@ const offlinePending = ref(queueCount())
 const correctionList = ref([])
 const showCorrectionModal = ref(false)
 
+// 症状上报不是数据问题，是病情问题，必须在列表最上面
+const symptomCount = computed(() => correctionList.value.filter(c => c.category === 'SYMPTOM').length)
+const correctionBannerText = computed(() => {
+  const symptom = symptomCount.value
+  const wrong = correctionList.value.length - symptom
+  if (symptom > 0 && wrong > 0) return `${symptom} 条症状上报，${wrong} 条说记错了`
+  if (symptom > 0) return `${symptom} 条症状上报，请当面看一下`
+  return `${wrong} 条记录患者说记错了`
+})
+
 async function loadCorrections(wardId) {
   if (!wardId) return
   try {
     const list = await getCorrectionRequestsApi(wardId)
-    correctionList.value = list || []
+    // 症状排前面：护士扫一眼先看到病情信号
+    correctionList.value = (list || []).slice().sort((a, b) => {
+      const sa = a.category === 'SYMPTOM' ? 0 : 1
+      const sb = b.category === 'SYMPTOM' ? 0 : 1
+      return sa - sb
+    })
   } catch (e) {
     // 拉不到不影响主流程，下一次刷新再试
     correctionList.value = []
   }
 }
 
-// 护士确认这条没问题
+// 症状上报没有「对错」可判断，点一下就是知道了
+function onCorrectionTap(item) {
+  if (item.category === 'SYMPTOM') {
+    uni.showModal({
+      title: `${item.bedNo} ${item.patientName}`,
+      content: `${item.itemName}${item.amount ? ' · ' + item.amount + 'ml' : ''}\n上报时间 ${(item.createTime || '').replace('T', ' ').substring(0, 16)}\n\n患者自己上报的症状，请到床边看一下。`,
+      confirmText: '知道了',
+      showCancel: false
+    })
+    return
+  }
+  goFixCorrection(item)
+}
+
+// 记录本身没问题 / 症状已知晓
 async function dismissCorrection(item) {
   try {
     await handleCorrectionRequestApi(item.id)
     correctionList.value = correctionList.value.filter(c => c.id !== item.id)
-    uni.showToast({ title: '已标记确认无误', icon: 'none' })
+    uni.showToast({
+      title: item.category === 'SYMPTOM' ? '已知晓，请到床边查看' : '已标记确认无误',
+      icon: 'none'
+    })
   } catch (e) {
     console.error('处理核对请求失败', e)
   }
 }
 
-// 去患者详情修正（那里有改/删，且会留痕）
+// 记录不成立：不代改，直接撤掉这条，让患者重新记一次
+async function rejectCorrection(item) {
+  const confirmed = await new Promise((resolve) => {
+    uni.showModal({
+      title: '驳回这条记录？',
+      content: `【${item.itemName} ${item.amount}ml】会从今天的出入量里移除，患者会收到提醒重新记一次。\n\n护士不代改数据，驳回后不可撤回。`,
+      confirmText: '驳回',
+      confirmColor: '#ff4d4f',
+      success: (res) => resolve(res.confirm),
+      fail: () => resolve(false)
+    })
+  })
+  if (!confirmed) return
+  try {
+    await rejectCorrectionRequestApi(item.id)
+    correctionList.value = correctionList.value.filter(c => c.id !== item.id)
+    uni.showToast({ title: '已驳回，等患者重记', icon: 'none' })
+    if (currentWard.value) {
+      loadWardData(currentWard.value.id)
+    }
+  } catch (e) {
+    console.error('驳回失败', e)
+    uni.showToast({ title: '驳回失败，请重试', icon: 'none' })
+  }
+}
+
+// 点进患者详情，只是想看看这条记录的上下文（谁录的、旁边还记了什么），
+// 判断对错仍然只在详情页点「确认无误 / 驳回」，不允许护士代改患者的记录
 async function goFixCorrection(item) {
   showCorrectionModal.value = false
-  uni.navigateTo({ url: `/pages/patient/detail?patientId=${item.patientId}` })
+  const datePart = (item.recordTime || '').substring(0, 10)
+  const query = [
+    `patientId=${item.patientId}`,
+    `recordId=${item.recordId}`,
+    `category=${item.category}`,
+    `correctionId=${item.id}`,
+    datePart ? `date=${datePart}` : '',
+    `reason=${encodeURIComponent(item.reason || '')}`
+  ].filter(Boolean).join('&')
+  uni.navigateTo({ url: `/pages/patient/detail?${query}` })
 }
 
 async function retryOffline() {
@@ -701,30 +791,69 @@ const myDutyBedNos = computed(() => {
   return patientList.value.filter(p => p.isMyDuty).map(p => p.bedNo)
 })
 
-const myPatientsCount = computed(() => {
-  return patientList.value.filter(p => p.isMyDuty).length
+// 我管辖的在院患者（顶部数字、漏记哨兵、合计入出量共用这一个基数）
+const myDutyPatients = computed(() => patientList.value.filter(p => p.isMyDuty))
+
+const myPatientsCount = computed(() => myDutyPatients.value.length)
+
+// 护士：'我负责' 与 '全部' 是两个视角，护士长只有病区视角
+const isWardScope = computed(() => userStore.isHeadNurse || patientFilterScope.value === 'all')
+
+const headerPatientCount = computed(() => (isWardScope.value ? allPatientsCount.value : myPatientsCount.value))
+
+const headerPatientLabel = computed(() => {
+  if (userStore.isHeadNurse) return '病区总病患'
+  if (isWardScope.value) return '全部病患'
+  return '我负责病患'
+})
+
+// 头部合计：看全部时用病区汇总，看我负责时只算我管的床
+const headerIntake = computed(() => {
+  if (isWardScope.value) return overview.value?.wardTotalIntake || 0
+  return myDutyPatients.value.reduce((sum, p) => sum + Number(p.todayIntake || 0), 0)
+})
+
+const headerOutput = computed(() => {
+  if (isWardScope.value) return overview.value?.wardTotalOutput || 0
+  return myDutyPatients.value.reduce((sum, p) => sum + Number(p.todayOutput || 0), 0)
 })
 
 const abnormalPatientsCount = computed(() => {
   return patientList.value.filter(p => p.isAbnormal).length
 })
 
-// 漏记哨兵：超过 4 小时（或今日完全没记）需要补记的患者
-const missedPatientsCount = computed(() => {
-  return patientList.value.filter(p => p.isMissed).length
+// 漏记哨兵：护士只看自己管辖的床（超出自己管辖的床提醒了也补不了），护士长看全病区
+const missedPatients = computed(() => {
+  const base = userStore.isHeadNurse ? patientList.value : myDutyPatients.value
+  return base.filter(p => p.isMissed)
 })
+
+const missedPatientsCount = computed(() => missedPatients.value.length)
+
+const missedBannerText = computed(() => {
+  const prefix = userStore.isHeadNurse ? '' : '我管辖的 '
+  return `${prefix}${missedPatientsCount.value} 位患者超过 4 小时未记录`
+})
+
+function toggleHeaderScope() {
+  if (userStore.isHeadNurse) {
+    patientFilterScope.value = 'all'
+    return
+  }
+  patientFilterScope.value = patientFilterScope.value === 'my' ? 'all' : 'my'
+}
 
 const displayPatientList = computed(() => {
   if (patientFilterScope.value === 'abnormal') {
     return patientList.value.filter(p => p.isAbnormal)
   }
   if (patientFilterScope.value === 'missed') {
-    return patientList.value.filter(p => p.isMissed)
+    return missedPatients.value
   }
   if (userStore.isHeadNurse || patientFilterScope.value === 'all') {
     return patientList.value
   }
-  return patientList.value.filter(p => p.isMyDuty)
+  return myDutyPatients.value
 })
 
 function toggleMissedFilter() {
@@ -1309,6 +1438,26 @@ onMounted(() => {
   checkLoginAndLoad()
 })
 
+// 患者随时可能说「记错了」，护士一直停在首页时也要能看到。
+// 只在首页可见时每分钟拉一次待核对列表，量很小（通常 0-5 条），切走就停。
+let correctionTimer = null
+
+function startCorrectionPolling() {
+  stopCorrectionPolling()
+  correctionTimer = setInterval(() => {
+    if (currentWard.value && !userStore.isPatient) {
+      loadCorrections(currentWard.value.id)
+    }
+  }, 60000)
+}
+
+function stopCorrectionPolling() {
+  if (correctionTimer) {
+    clearInterval(correctionTimer)
+    correctionTimer = null
+  }
+}
+
 onShow(() => {
   syncRoleTabBar()
   offlinePending.value = queueCount()
@@ -1319,6 +1468,15 @@ onShow(() => {
   if (userStore.isBound && !userStore.isPatient && currentWard.value) {
     loadWardData(currentWard.value.id)
   }
+  startCorrectionPolling()
+})
+
+onHide(() => {
+  stopCorrectionPolling()
+})
+
+onUnload(() => {
+  stopCorrectionPolling()
 })
 
 onPullDownRefresh(async () => {
@@ -2013,6 +2171,26 @@ onPullDownRefresh(async () => {
   background: #fafbfc;
 }
 
+/* 症状上报：红边直接把人拽到这一条，和数据纠错明确分开 */
+.cm-item.cm-sym {
+  border-color: #ffccc7;
+  background: #fff2f0;
+}
+
+.cm-sym-tag {
+  font-size: 22rpx;
+  color: #ffffff;
+  background: #cf1322;
+  padding: 4rpx 12rpx;
+  border-radius: 6rpx;
+  margin-right: 10rpx;
+}
+
+.cm-reason.strong {
+  color: #cf1322;
+  font-weight: bold;
+}
+
 .cm-line1 {
   display: flex;
   align-items: center;
@@ -2062,16 +2240,34 @@ onPullDownRefresh(async () => {
   margin-top: 16rpx;
 }
 
+.cm-tip {
+  font-size: 24rpx;
+  color: #8c8c8c;
+  line-height: 1.5;
+  padding: 0 30rpx 16rpx;
+}
+
+.cm-look {
+  font-size: 22rpx;
+  color: #1677ff;
+  text-align: right;
+  margin-top: 10rpx;
+}
+
 .cm-btn {
   font-size: 28rpx;
-  border-radius: 30rpx;
-  padding: 12rpx 28rpx;
+  border-radius: 44rpx;
+  height: 84rpx;
+  line-height: 84rpx;
+  padding: 0 24rpx;
+  text-align: center;
+  box-sizing: border-box;
 }
 
 .cm-btn.ghost {
-  color: #595959;
-  background: #f5f7fa;
-  border: 1rpx solid #e5e9f0;
+  color: #cf1322;
+  background: #fff1f0;
+  border: 1rpx solid #ffccc7;
 }
 
 .cm-btn.primary {

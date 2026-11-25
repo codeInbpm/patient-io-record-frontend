@@ -115,6 +115,14 @@
         <text class="m-arrow">›</text>
       </view>
 
+      <!-- 我的药品库：本地自维护，不依赖医院系统 -->
+      <view class="menu-item" v-if="userStore.isHeadNurse || userStore.isNurse" @tap="goToDrugLibrary">
+        <text class="m-icon">💊</text>
+        <text class="m-text">我的药品库</text>
+        <text class="m-sub">补液用药维护 / 规格核对</text>
+        <text class="m-arrow">›</text>
+      </view>
+
       <view class="menu-item" v-if="userStore.isHeadNurse" @tap="goToStats">
         <text class="m-icon">📊</text>
         <text class="m-text">全科室每日出入平衡分析</text>
@@ -744,6 +752,10 @@ function goToHandoverHistory() {
 
 function goToInfusion() {
   uni.navigateTo({ url: '/pages/infusion/list' })
+}
+
+function goToDrugLibrary() {
+  uni.navigateTo({ url: '/pages/drug/library' })
 }
 
 function goToPatientHome() {

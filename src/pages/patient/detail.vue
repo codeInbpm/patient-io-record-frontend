@@ -34,6 +34,21 @@
       @retry="loadData"
     />
 
+    <!-- 从「患者说记错了」过来：把要改的那条摆在最前面，护士不用在流水里翻 -->
+    <view class="correction-focus" v-if="focusItem">
+      <view class="cf-head">
+        <text class="cf-tag">患者反馈</text>
+        <text class="cf-text">
+          {{ formatTime(focusItem.recordTime) }} · {{ focusItem.itemName }} {{ focusItem.amount }}ml
+        </text>
+      </view>
+      <text class="cf-reason">患者说：{{ focusReason || '这条记错了' }}</text>
+      <view class="cf-actions">
+        <text class="cf-btn danger" @tap="rejectCorrection(focusItem)">驳回，让患者重记</text>
+        <text class="cf-btn primary" @tap="confirmCorrectionOk()">确认无误</text>
+      </view>
+    </view>
+
     <!-- 日期选择与导航 -->
     <view class="date-bar">
       <button class="date-nav-btn" size="mini" @tap="changeDate(-1)">前一天</button>
@@ -111,7 +126,8 @@
 
       <view class="timeline-list">
         <view 
-          :class="['timeline-card', item.alertLevel === 'red' ? 'item-alert-red' : (item.alertLevel === 'yellow' ? 'item-alert-yellow' : '')]" 
+          :id="'rec-' + item.category + '-' + item.id"
+          :class="['timeline-card', item.alertLevel === 'red' ? 'item-alert-red' : (item.alertLevel === 'yellow' ? 'item-alert-yellow' : ''), isFocusItem(item) ? 'item-focus' : '']" 
           v-for="item in timelineItems" 
           :key="item.id + item.category"
         >
@@ -133,6 +149,7 @@
                 ({{ item.recorderText || (item.recorderRole === 'PATIENT' ? '患者本人录入' : (item.recorderName ? item.recorderName + '录入' : '护士录入')) }})
               </text>
               <text class="t-nature" v-if="item.natureOrColor">性状: {{ item.natureOrColor }}</text>
+              <text class="t-reported" v-if="item.correctionStatus === 'PENDING'" @tap.stop="handleReportedTap(item)">患者说记错了 ›</text>
             </view>
             <view class="t-remark" v-if="item.remark">备注: {{ item.remark }}</view>
           </view>
@@ -186,7 +203,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { onLoad, onShow } from '@dcloudio/uni-app'
 import { useUserStore } from '../../stores/user'
 import { getPatientDetailApi } from '../../api/patient'
@@ -197,7 +214,9 @@ import {
   exportFluidRecordsExcel,
   getHistorySummariesApi,
   recordIntakeApi,
-  recordOutputApi
+  recordOutputApi,
+  handleCorrectionRequestApi,
+  rejectCorrectionRequestApi
 } from '../../api/record'
 import { formatDate, formatTimeOnly, formatSinceLastRecord } from '../../utils/date'
 import TrendBars from '../../components/TrendBars.vue'
@@ -221,6 +240,113 @@ const lastRecordText = computed(() => {
   if (!patient.value) return ''
   return formatSinceLastRecord(patient.value.lastRecordTime, patient.value.hoursSinceLastRecord)
 })
+
+// 从「患者说记错了」跳进来时带着的那条记录
+const focusRecordId = ref(null)
+const focusCategory = ref('')
+const focusReason = ref('')
+const focusCorrectionId = ref(null)
+const focusApplied = ref(false)
+
+const focusItem = computed(() => {
+  if (!focusRecordId.value) return null
+  return timelineItems.value.find(
+    it => String(it.id) === String(focusRecordId.value) && it.category === focusCategory.value
+  ) || null
+})
+
+function isFocusItem(item) {
+  return Boolean(focusItem.value) && String(item.id) === String(focusItem.value.id) && item.category === focusItem.value.category
+}
+
+// 滚到那条记录上，让护士一眼看到要改哪条
+function applyFocus() {
+  if (focusApplied.value || !focusRecordId.value) return
+  const target = focusItem.value
+  if (!target) {
+    focusApplied.value = true
+    uni.showToast({ title: '这条记录已被修改或撤销', icon: 'none' })
+    return
+  }
+  focusApplied.value = true
+  nextTick(() => {
+    uni.pageScrollTo({
+      selector: `#rec-${target.category}-${target.id}`,
+      duration: 300,
+      offsetTop: -100,
+      fail: () => {}
+    })
+  })
+}
+
+// 护士看完认为记录本身没问题：直接把这条待核对请求关掉，不用回首页再点一遍
+async function confirmCorrectionOk(requestId) {
+  const id = typeof requestId === 'number' ? requestId : focusCorrectionId.value
+  if (!id) {
+    uni.showToast({ title: '没有待处理的核对请求', icon: 'none' })
+    return
+  }
+  try {
+    await handleCorrectionRequestApi(id)
+    uni.showToast({ title: '已标记确认无误', icon: 'success' })
+    focusRecordId.value = null
+    focusCorrectionId.value = null
+    focusReason.value = ''
+    loadData()
+  } catch (e) {
+    console.error('标记核对失败', e)
+  }
+}
+
+// 不走首页弹窗、直接进详情时，点流水上的「患者说记错了」也能就地判断
+function handleReportedTap(item) {
+  if (!canRecord.value) {
+    uni.showToast({ title: '仅管辖护士可处理', icon: 'none' })
+    return
+  }
+  uni.showActionSheet({
+    itemList: ['记录没错，标记已核对', '驳回，让患者重新记'],
+    success: (res) => {
+      if (res.tapIndex === 0) {
+        confirmCorrectionOk(item.correctionRequestId)
+      } else {
+        rejectCorrection(item)
+      }
+    }
+  })
+}
+
+// 驳回：这条从当天出入量中移除，患者重新记。护士不代改，避免「谁录的谁负责」断掉
+async function rejectCorrection(item) {
+  const requestId = item?.correctionRequestId || focusCorrectionId.value
+  if (!requestId) {
+    uni.showToast({ title: '没有待处理的核对请求', icon: 'none' })
+    return
+  }
+  const confirmed = await new Promise((resolve) => {
+    uni.showModal({
+      title: '驳回这条记录？',
+      content: `【${item.itemName} ${item.amount}ml】会从出入量里移除，患者需要重新记一次。\n\n驳回后不可撤回。`,
+      confirmText: '驳回',
+      confirmColor: '#ff4d4f',
+      success: (res) => resolve(res.confirm),
+      fail: () => resolve(false)
+    })
+  })
+  if (!confirmed) return
+  try {
+    await rejectCorrectionRequestApi(requestId)
+    uni.showToast({ title: '已驳回，等患者重记', icon: 'none' })
+    focusRecordId.value = null
+    focusCorrectionId.value = null
+    focusReason.value = ''
+    loadData()
+    loadTrend()
+  } catch (e) {
+    console.error('驳回失败', e)
+    uni.showToast({ title: '驳回失败，请重试', icon: 'none' })
+  }
+}
 
 const canRecord = computed(() => {
   if (userStore.isHeadNurse || userStore.isPatient) return true
@@ -262,6 +388,7 @@ async function loadData() {
     const balance = await getDailyBalanceApi(patientId.value, currentDate.value)
     dailyData.value = balance
     loadState.value = 'ready'
+    applyFocus()
   } catch (e) {
     console.error(e)
     if (!patient.value) {
@@ -436,6 +563,16 @@ async function submitEdit() {
 onLoad((options) => {
   if (options.patientId) {
     patientId.value = options.patientId
+  }
+  // 带着患者反馈进来：定位到那条记录，日期也切到它所在的那天（可能是昨天）
+  if (options.recordId) {
+    focusRecordId.value = options.recordId
+    focusCategory.value = options.category || 'INTAKE'
+    focusReason.value = options.reason ? decodeURIComponent(options.reason) : ''
+    focusCorrectionId.value = options.correctionId ? Number(options.correctionId) : null
+  }
+  if (options.date) {
+    currentDate.value = options.date
   }
 })
 
@@ -971,5 +1108,82 @@ onShow(() => {
 .item-alert-yellow {
   background-color: #fdf6ec !important;
   border-left: 6rpx solid #e6a23c !important;
+}
+
+/* 患者反馈了「记错了」：这条记录要先被看见、被处理 */
+.correction-focus {
+  background: #fffbe6;
+  border: 2rpx solid #ffd591;
+  border-radius: 16rpx;
+  padding: 20rpx 24rpx;
+  margin-bottom: 20rpx;
+}
+.cf-head {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10rpx;
+}
+.cf-tag {
+  background: #fa8c16;
+  color: #ffffff;
+  font-size: 22rpx;
+  padding: 2rpx 10rpx;
+  border-radius: 6rpx;
+  margin-right: 12rpx;
+}
+.cf-text {
+  font-size: 28rpx;
+  font-weight: bold;
+  color: #262626;
+}
+.cf-reason {
+  font-size: 26rpx;
+  color: #d46b08;
+  display: block;
+  margin-bottom: 16rpx;
+}
+.cf-actions {
+  display: flex;
+}
+.cf-btn {
+  flex: 1;
+  text-align: center;
+  font-size: 26rpx;
+  height: 76rpx;
+  line-height: 76rpx;
+  border-radius: 12rpx;
+  box-sizing: border-box;
+}
+.cf-btn.ghost {
+  background: #ffffff;
+  color: #595959;
+  border: 1rpx solid #d9d9d9;
+  margin-right: 16rpx;
+}
+.cf-btn.danger {
+  background: #fff1f0;
+  color: #cf1322;
+  border: 1rpx solid #ffccc7;
+  margin-right: 16rpx;
+}
+.cf-btn.primary {
+  background: #1677ff;
+  color: #ffffff;
+}
+
+/* 高亮被反馈的那条流水 */
+.item-focus {
+  background-color: #fffdf5 !important;
+  box-shadow: 0 0 0 3rpx #fa8c16;
+  border-radius: 12rpx;
+}
+
+.t-reported {
+  font-size: 22rpx;
+  color: #d46b08;
+  background: #fff7e6;
+  padding: 2rpx 10rpx;
+  border-radius: 6rpx;
+  margin-left: 10rpx;
 }
 </style>

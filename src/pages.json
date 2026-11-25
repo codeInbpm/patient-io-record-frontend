@@ -114,6 +114,13 @@
         "enablePullDownRefresh": true,
         "backgroundColor": "#f4f6fa"
       }
+    },
+    {
+      "path": "pages/drug/library",
+      "style": {
+        "navigationBarTitleText": "我的药品库",
+        "backgroundColor": "#f5f7fa"
+      }
     }
   ],
   "globalStyle": {

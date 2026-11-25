@@ -80,11 +80,25 @@
         </view>
 
         <view class="card-content">
-          <!-- 补液药物与用法 -->
-          <view class="meta-row highlight-row">
-            <text class="meta-label">补液药物:</text>
-            <text class="meta-val medicine-title">{{ item.remark || '静脉滴注' }}</text>
-            <text class="usage-tag">{{ item.usageType }}</text>
+          <!-- 补液药物：每种药独立成块，避免挤在一条长文本里看错 -->
+          <view class="drug-block">
+            <view class="drug-block-head">
+              <text class="drug-block-label">补液药物</text>
+              <text class="usage-tag">{{ item.usageType }}</text>
+            </view>
+            <view class="drug-rows" v-if="drugsOf(item).length">
+              <view class="drug-row" v-for="(d, i) in drugsOf(item)" :key="i">
+                <text class="drug-index">{{ i + 1 }}</text>
+                <view class="drug-main">
+                  <text class="drug-name">{{ d.name }}</text>
+                  <text class="drug-spec" v-if="d.spec">{{ d.spec }}</text>
+                  <text class="drug-dose" v-if="d.dose">{{ d.dose }}{{ d.unit || '' }}</text>
+                </view>
+                <text class="drug-alert" v-if="d.highAlert === 1">高警示</text>
+              </view>
+            </view>
+            <text class="drug-fallback" v-else>{{ item.remark || '静脉滴注' }}</text>
+            <text class="drug-note" v-if="drugNote(item)">备注：{{ drugNote(item) }}</text>
           </view>
 
           <view class="meta-row">
@@ -152,11 +166,25 @@
           <text class="status-done">已结束</text>
         </view>
         <view class="card-content">
-          <!-- 补的什么液（突出展示） -->
-          <view class="meta-row highlight-row">
-            <text class="meta-label">补液药物:</text>
-            <text class="meta-val medicine-title">{{ item.remark || (item.usageType + ' 静滴补液') }}</text>
-            <text class="usage-tag">{{ item.usageType }}</text>
+          <!-- 补的什么液：每种药独立成块 -->
+          <view class="drug-block">
+            <view class="drug-block-head">
+              <text class="drug-block-label">补液药物</text>
+              <text class="usage-tag">{{ item.usageType }}</text>
+            </view>
+            <view class="drug-rows" v-if="drugsOf(item).length">
+              <view class="drug-row" v-for="(d, i) in drugsOf(item)" :key="i">
+                <text class="drug-index">{{ i + 1 }}</text>
+                <view class="drug-main">
+                  <text class="drug-name">{{ d.name }}</text>
+                  <text class="drug-spec" v-if="d.spec">{{ d.spec }}</text>
+                  <text class="drug-dose" v-if="d.dose">{{ d.dose }}{{ d.unit || '' }}</text>
+                </view>
+                <text class="drug-alert" v-if="d.highAlert === 1">高警示</text>
+              </view>
+            </view>
+            <text class="drug-fallback" v-else>{{ item.remark || (item.usageType + ' 静滴补液') }}</text>
+            <text class="drug-note" v-if="drugNote(item)">备注：{{ drugNote(item) }}</text>
           </view>
 
           <view class="meta-row">
@@ -267,13 +295,19 @@
             </view>
           </view>
 
-          <!-- 2. 补液药物名称 -->
+          <!-- 2. 补液药物：从字典选择 -->
           <view class="modal-form-item">
-            <text class="modal-label required">补液药物名称 / 规格 *</text>
+            <text class="modal-label required">补液药物 *</text>
+            <DrugPicker v-model="addForm.drugs" :max="5" :route="addForm.usageType" />
+          </view>
+
+          <!-- 2.1 备注（可选） -->
+          <view class="modal-form-item">
+            <text class="modal-label">备注（可选）</text>
             <input
               class="modal-input"
               v-model="addForm.remark"
-              placeholder="如: 0.9%氯化钠250ml + 注射用头孢2.0g"
+              placeholder="如: 静滴 40 滴/分"
             />
           </view>
 
@@ -392,6 +426,7 @@ import { getActiveInfusionsApi, getCompletedInfusionsApi, endInfusionApi, create
 import { getPatientsApi } from '../../api/patient'
 import { useUserStore } from '../../stores/user'
 import StateView from '../../components/StateView.vue'
+import DrugPicker from '../../components/DrugPicker.vue'
 
 const userStore = useUserStore()
 const loadState = ref('loading')
@@ -441,6 +476,7 @@ const addForm = reactive({
   usageType: 'ivg',
   startTime: '',
   estimatedEndTime: '',
+  drugs: [],
   remark: '',
   syncToIntake: true
 })
@@ -462,9 +498,34 @@ function parseDateTime(str) {
   return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6] || 0))
 }
 
+/**
+ * 拆出药品明细用于逐条展示。
+ * 新记录走接口返回的 drugs 数组；历史记录只有 remark 文本
+ *（形如「A 250ml + B 2g | 滴速40」），按 + 拆开并把备注切掉。
+ */
+function drugsOf(item) {
+  if (!item) return []
+  if (Array.isArray(item.drugs) && item.drugs.length) {
+    return item.drugs.filter(d => d && d.name)
+  }
+  const text = String(item.remark || '').split('|')[0].trim()
+  // 老数据是整句自由文本，只有明确用 + 并列时才拆，否则按原文整段展示
+  if (!text || text.indexOf('+') < 0) return []
+  return text
+    .split('+')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(name => ({ name, spec: '', dose: '', unit: '', highAlert: 0 }))
+}
+
+/** remark 里「| 后面」是滴速之类的自由备注，单独展示 */
+function drugNote(item) {
+  const parts = String((item && item.remark) || '').split('|')
+  return parts.length > 1 ? parts.slice(1).join('|').trim() : ''
+}
+
 // 以预计拔针时间为准本地重算剩余分钟与进度，接口返回值只作为初始值
-const decoratedActiveList = computed(() => {
-  const now = tickNow.value
+const decoratedActiveList = computed(() => {  const now = tickNow.value
   return activeList.value.map(item => {
     const start = parseDateTime(item.startTime)
     const end = parseDateTime(item.estimatedEndTime)
@@ -580,6 +641,7 @@ const openAddModal = () => {
   addForm.startTime = `${getTodayDateStr()} ${addStartTimeStr.value}:00`
   addForm.capacity = 250
   addForm.usageType = 'ivg'
+  addForm.drugs = []
   addForm.remark = ''
   addForm.syncToIntake = true
   isCustomCap.value = false
@@ -687,8 +749,8 @@ const submitAddInfusion = async () => {
     uni.showToast({ title: '请选择在床病患', icon: 'none' })
     return
   }
-  if (!addForm.remark.trim()) {
-    uni.showToast({ title: '请填写补液药物名称', icon: 'none' })
+  if (!addForm.drugs || !addForm.drugs.length) {
+    uni.showToast({ title: '请从字典选择补液药物', icon: 'none' })
     return
   }
   if (!addForm.usageType || !addForm.usageType.trim()) {
@@ -704,7 +766,15 @@ const submitAddInfusion = async () => {
       usageType: addForm.usageType,
       startTime: addForm.startTime,
       estimatedEndTime: addForm.estimatedEndTime,
-      remark: addForm.remark.trim(),
+      drugs: addForm.drugs.map((d) => ({
+        id: d.id || null,
+        name: d.name,
+        spec: d.spec || '',
+        unit: d.unit || '',
+        highAlert: d.highAlert || 0,
+        manual: !!d.manual
+      })),
+      remark: (addForm.remark || '').trim(),
       syncToIntake: addForm.syncToIntake,
       imageUrls: addImages.value
     }
@@ -947,6 +1017,106 @@ const submitAddInfusion = async () => {
   background: #f6ffed;
   padding: 6rpx 16rpx;
   border-radius: 30rpx;
+}
+
+.drug-block {
+  background: #fafcff;
+  border: 1rpx solid #eef3ff;
+  border-radius: 12rpx;
+  padding: 14rpx 14rpx 4rpx;
+  margin-bottom: 14rpx;
+}
+
+.drug-block-head {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10rpx;
+}
+
+.drug-block-label {
+  font-size: 24rpx;
+  color: #8c8c8c;
+}
+
+.drug-block-head .usage-tag {
+  margin-left: auto;
+}
+
+.drug-row {
+  display: flex;
+  align-items: flex-start;
+  background: #ffffff;
+  border: 1rpx solid #e8eefc;
+  border-radius: 10rpx;
+  padding: 12rpx 14rpx;
+  margin-bottom: 10rpx;
+}
+
+.drug-index {
+  width: 32rpx;
+  height: 32rpx;
+  line-height: 32rpx;
+  text-align: center;
+  background: #e6f0ff;
+  color: #1677ff;
+  font-size: 20rpx;
+  border-radius: 50%;
+  margin-right: 12rpx;
+  margin-top: 4rpx;
+  flex-shrink: 0;
+}
+
+.drug-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+
+.drug-name {
+  font-size: 27rpx;
+  color: #1677ff;
+  font-weight: 600;
+  margin-right: 10rpx;
+}
+
+.drug-spec {
+  font-size: 24rpx;
+  color: #595959;
+  margin-right: 10rpx;
+}
+
+.drug-dose {
+  font-size: 24rpx;
+  color: #389e0d;
+  font-weight: 600;
+}
+
+.drug-alert {
+  font-size: 20rpx;
+  color: #cf1322;
+  background: #fff1f0;
+  border-radius: 6rpx;
+  padding: 3rpx 8rpx;
+  margin-left: 8rpx;
+  flex-shrink: 0;
+}
+
+.drug-fallback {
+  display: block;
+  font-size: 26rpx;
+  color: #262626;
+  padding-bottom: 10rpx;
+  line-height: 1.5;
+}
+
+.drug-note {
+  display: block;
+  font-size: 23rpx;
+  color: #8c8c8c;
+  padding: 0 2rpx 10rpx;
+  line-height: 1.4;
 }
 
 .meta-row {

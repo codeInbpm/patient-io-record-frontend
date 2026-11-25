@@ -30,6 +30,24 @@
         </view>
       </view>
 
+      <!-- 护士驳回的记录：那条已经从今天的出入量里去掉，请患者按实际重记 -->
+      <view class="rejected-card" v-if="rejectedList.length > 0">
+        <view class="rc-head">
+          <text class="rc-icon">↩️</text>
+          <text class="rc-title">护士退回了 {{ rejectedList.length }} 条记录</text>
+        </view>
+        <view class="rc-item" v-for="r in rejectedList" :key="r.id">
+          <view class="rc-info">
+            <text class="rc-desc">
+              {{ (r.recordTime || '').slice(11, 16) }}
+              {{ r.category === 'INTAKE' ? '喝的' : '排的' }} {{ r.amount }}ml · {{ r.itemName }}
+            </text>
+            <text class="rc-sub">护士核对后认为这条不对，已经帮你去掉了，请按实际情况重记一次</text>
+          </view>
+          <text class="rc-btn" @tap="goReRecord(r)">重新记</text>
+        </view>
+      </view>
+
       <!-- 今日出入量卡片 -->
       <view class="today-io-card" v-if="todayBalance">
         <view class="card-head">
@@ -87,20 +105,17 @@
             <text class="emoji">🚽</text>
             <text class="b-title">排尿</text>
             <text class="b-desc">尿量、颜色</text>
-            <view class="quick-plus" @tap.stop="quickSave('urine')">
-              {{ quickSaving === 'urine' ? '正在记…' : '+ 一次 (200ml)' }}
-            </view>
+            <!-- 尿量差 4 倍、颜色可能是血尿，不能替患者猜一个默认值 -->
+            <view class="quick-plus pick" @tap.stop="quickRecord('urine')">选量后记 ›</view>
           </view>
           <view class="btn-box stool" @tap="quickRecord('stool')">
             <text class="emoji">💩</text>
             <text class="b-title">排便</text>
             <text class="b-desc">几次、稀稠</text>
-            <view class="quick-plus" @tap.stop="quickSave('stool')">
-              {{ quickSaving === 'stool' ? '正在记…' : '+ 一次 (中量)' }}
-            </view>
+            <view class="quick-plus pick" @tap.stop="quickRecord('stool')">选量后记 ›</view>
           </view>
         </view>
-        <text class="quick-hint">点「+」直接记默认量，记错了在下面记录里点撤销</text>
+        <text class="quick-hint">喝水和吃饭可点「+」直接记一杯/一碗；排尿排便要先选量，避免记成假数</text>
       </view>
 
       <!-- 我今天填报的流水记录 -->
@@ -117,16 +132,23 @@
           <text :class="['r-amt', item.category === 'INTAKE' ? 'in' : 'out']">
             {{ item.category === 'INTAKE' ? '+' : '-' }}{{ item.amount }} ml
           </text>
-          <!-- 5 分钟内自己撤销；超过 5 分钟给一个「记错了」，让护士知道 -->
+          <!-- 5 分钟内自己撤销；超过 5 分钟给一个「记错了」，让护士知道。
+               状态由后端随流水返回，刷新后不会复原成可重复点击 -->
           <text class="undo-btn" v-if="canUndo(item)" @tap.stop="undoRecord(item)">撤销</text>
-          <text class="fix-btn" v-else-if="item.reported" @tap.stop="noop">已反馈</text>
+          <view class="fix-state pending" v-else-if="item.correctionStatus === 'PENDING'" @tap.stop="hintState('PENDING')">
+            <text>已反馈</text>
+            <text class="fs-sub">核对中</text>
+          </view>
+          <view class="fix-state done" v-else-if="item.correctionStatus === 'HANDLED'" @tap.stop="hintState('HANDLED')">
+            <text>✓ 已核对</text>
+          </view>
           <text class="fix-btn" v-else @tap.stop="reportWrong(item)">记错了</text>
         </view>
         <view class="empty-text" v-if="myItems.length === 0">
           今天还没记，点上面的按钮记一笔
         </view>
         <view class="undo-tip" v-if="myItems.length > 0">
-          填错可在 5 分钟内点「撤销」，超过 5 分钟请联系护士
+          记错了就先点「记错了」告诉护士，护士核对后会改正；5 分钟内的可以自己撤销
         </view>
       </view>
 
@@ -161,8 +183,8 @@ import {
   deleteIntakeApi,
   deleteOutputApi,
   recordIntakeApi,
-  recordOutputApi,
-  submitCorrectionRequestApi
+  submitCorrectionRequestApi,
+  getMyRejectedCorrectionsApi
 } from '../../api/record'
 import { formatDate, formatTimeOnly } from '../../utils/date'
 import { syncRoleTabBar } from '../../utils/tabbar'
@@ -178,6 +200,45 @@ const myItems = computed(() => {
 })
 
 const weekList = ref([])
+// 被护士驳回、还没重记的记录
+const rejectedList = ref([])
+
+async function loadRejected() {
+  if (!userStore.token || !userStore.isBound) {
+    rejectedList.value = []
+    return
+  }
+  try {
+    rejectedList.value = (await getMyRejectedCorrectionsApi()) || []
+  } catch (e) {
+    // 拉不到不打扰患者，下次刷新再试
+    console.error('加载退回记录失败', e)
+    rejectedList.value = []
+  }
+}
+
+// 驳回的那条已经被护士去掉了，患者要按实际重记一次
+const REJECT_MODE = {
+  INTAKE: 'water',
+  OUTPUT: 'urine'
+}
+
+function goReRecord(item) {
+  let mode = REJECT_MODE[item.category] || 'water'
+  const name = item.itemName || ''
+  if (item.category === 'INTAKE' && /粥|面|饭|藕粉/.test(name)) {
+    mode = 'meal'
+  } else if (item.category === 'OUTPUT' && /便/.test(name)) {
+    mode = 'stool'
+  }
+  const query = [
+    `mode=${mode}`,
+    `rejectedId=${item.id}`,
+    `amount=${item.amount || ''}`,
+    `itemName=${encodeURIComponent(name)}`
+  ].join('&')
+  uni.navigateTo({ url: `/pages/patient-view/quick-record?${query}` })
+}
 
 function parseRecordTime(value) {
   if (!value) return null
@@ -229,8 +290,28 @@ const FIX_REASONS = [
 
 function noop() {}
 
+// 状态标签也要能点：点了至少得给出一个说法，不然就是块死牌子
+function hintState(state) {
+  uni.showModal({
+    title: state === 'PENDING' ? '护士正在核对' : '护士已核对',
+    content: state === 'PENDING'
+      ? '这条已经告诉护士了，护士看过会处理。\n\n如果情况有变化，当面跟护士说一声。'
+      : '护士已经看过这条，认为没有问题。\n\n如果还是觉得不对，当面跟护士说一声。',
+    showCancel: false,
+    confirmText: '知道了'
+  })
+}
+
 function reportWrong(item) {
-  if (item.reported) return
+  // 已反馈过就不再重复提交，但要告诉患者为什么点不动，不能是死按钮
+  if (item.correctionStatus === 'PENDING') {
+    uni.showToast({ title: '护士正在核对这条，不用再报一次', icon: 'none' })
+    return
+  }
+  if (item.correctionStatus === 'HANDLED') {
+    uni.showToast({ title: '护士已经核对过这条了', icon: 'none' })
+    return
+  }
   uni.showActionSheet({
     itemList: FIX_REASONS,
     success: async (sheetRes) => {
@@ -243,7 +324,8 @@ function reportWrong(item) {
           reason
         })
         uni.hideLoading()
-        item.reported = true
+        // 状态写回本地这一条，下次刷新由后端返回同一个 PENDING，不会又变成可点的「记错了」
+        item.correctionStatus = 'PENDING'
         uni.showModal({
           title: '已告诉护士',
           content: `护士看到后会核对这条记录。\n\n反馈内容：${reason}`,
@@ -281,6 +363,7 @@ async function loadWeek() {
 async function checkPatient() {
   if (!userStore.token || !userStore.isBound) {
     patient.value = null
+    rejectedList.value = []
     return
   }
 
@@ -295,6 +378,7 @@ async function checkPatient() {
   } catch (e) {
     console.error(e)
   }
+  loadRejected()
 }
 
 function goToLogin() {
@@ -306,11 +390,11 @@ function goToBind() {
 }
 
 // 首页一键记录：一天喝 6 杯水、上 4 次厕所，不该每次都走一遍表单
+// 只保留无临床风险的项：一杯水/一碗粥的估值稳定，猜错也不影响判断。
+// 排尿排便不再给默认量——尿 100 和 400 差 4 倍，猜一个数会让净平衡系统性偏移。
 const QUICK_PRESETS = {
   water: { label: '一杯水', amount: 200 },
-  meal: { label: '一碗粥', amount: 200 },
-  urine: { label: '排尿一次', amount: 200 },
-  stool: { label: '排便一次', amount: 100 }
+  meal: { label: '一碗粥', amount: 200 }
 }
 
 const quickSaving = ref('')
@@ -344,24 +428,9 @@ async function quickSave(type) {
         recordTime,
         remark: '一碗（患者快捷记录）'
       })
-    } else if (type === 'urine') {
-      await recordOutputApi({
-        patientId: patient.value.id,
-        outputType: 'URINE',
-        amount: preset.amount,
-        natureOrColor: '淡黄清亮',
-        recordTime,
-        remark: '一次（患者快捷记录）'
-      })
     } else {
-      await recordOutputApi({
-        patientId: patient.value.id,
-        outputType: 'STOOL',
-        amount: preset.amount,
-        natureOrColor: '黄色软便',
-        recordTime,
-        remark: '1次 · 中量（患者快捷记录）'
-      })
+      // 排尿/排便不在这里兜默认值，一律走面板先选量
+      return
     }
     uni.showToast({ title: `记好了：${preset.label}`, icon: 'none' })
     await checkPatient()
@@ -481,6 +550,72 @@ onPullDownRefresh(async () => {
   padding: 24rpx;
   box-shadow: 0 4rpx 12rpx rgba(0, 0, 0, 0.05);
   margin-bottom: 24rpx;
+}
+
+/* 护士驳回：这条数据已经不可信，患者必须看到并重记 */
+.rejected-card {
+  background: #fff1f0;
+  border: 2rpx solid #ffccc7;
+  border-radius: 16rpx;
+  padding: 24rpx;
+  margin-bottom: 24rpx;
+}
+
+.rc-head {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8rpx;
+}
+
+.rc-icon {
+  font-size: 32rpx;
+  margin-right: 10rpx;
+}
+
+.rc-title {
+  font-size: 30rpx;
+  font-weight: bold;
+  color: #cf1322;
+}
+
+.rc-item {
+  display: flex;
+  align-items: center;
+  padding: 16rpx 0 4rpx;
+  border-top: 1rpx solid #ffd8d6;
+  margin-top: 14rpx;
+}
+
+.rc-info {
+  flex: 1;
+  padding-right: 16rpx;
+}
+
+.rc-desc {
+  font-size: 28rpx;
+  color: #262626;
+  display: block;
+}
+
+.rc-sub {
+  font-size: 22rpx;
+  color: #a8071a;
+  opacity: 0.85;
+  display: block;
+  margin-top: 6rpx;
+  line-height: 1.4;
+}
+
+.rc-btn {
+  min-width: 132rpx;
+  min-height: 76rpx;
+  line-height: 76rpx;
+  text-align: center;
+  background: #cf1322;
+  color: #ffffff;
+  border-radius: 38rpx;
+  font-size: 26rpx;
+  font-weight: bold;
 }
 
 .card-head {
@@ -606,6 +741,12 @@ onPullDownRefresh(async () => {
   border-color: #d3adf7;
 }
 
+/* 虚线 = 还要进去选一下；实线 = 点一下直接记 */
+.quick-plus.pick {
+  border-style: dashed;
+  font-weight: normal;
+}
+
 .quick-hint {
   display: block;
   margin-top: 16rpx;
@@ -651,16 +792,58 @@ onPullDownRefresh(async () => {
 
 .fix-btn {
   font-size: 26rpx;
-  color: #bfbfbf;
-  padding: 8rpx 14rpx;
-  margin-left: 8rpx;
+  color: #1677ff;
+  /* 灰色小字老人根本点不到，点击区必须到 88rpx */
+  min-width: 104rpx;
+  min-height: 88rpx;
+  line-height: 88rpx;
+  text-align: center;
+  padding: 0 12rpx;
+  margin-left: 4rpx;
+  box-sizing: border-box;
 }
 
 .undo-btn {
-  font-size: 26rpx;
+  font-size: 28rpx;
   color: #ff4d4f;
-  padding: 8rpx 14rpx;
-  margin-left: 8rpx;
+  min-width: 96rpx;
+  min-height: 88rpx;
+  line-height: 88rpx;
+  text-align: center;
+  padding: 0 12rpx;
+  margin-left: 4rpx;
+  box-sizing: border-box;
+}
+
+/* 已反馈 / 已核对：只做状态展示，不再可点，避免重复提交 */
+.fix-state {
+  min-width: 104rpx;
+  min-height: 88rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  margin-left: 4rpx;
+  padding: 0 10rpx;
+  font-size: 22rpx;
+  border-radius: 10rpx;
+  box-sizing: border-box;
+}
+
+.fix-state .fs-sub {
+  font-size: 20rpx;
+  opacity: 0.85;
+  margin-top: 2rpx;
+}
+
+.fix-state.pending {
+  color: #d46b08;
+  background: #fffbe6;
+}
+
+.fix-state.done {
+  color: #389e0d;
+  background: #f6ffed;
 }
 
 .undo-tip {

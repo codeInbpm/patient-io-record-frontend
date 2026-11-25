@@ -173,7 +173,9 @@ const form = ref({
   intakeType: 'ORAL',
   subType: 'WATER',
   itemName: '水',
-  amount: '150',
+  // 不预填 150：护士手快直接保存就会凭空产生一条「水 150ml」，
+  // 这类假数据比漏记更难发现，必须让录入人自己点一个量
+  amount: '',
   remark: ''
 })
 
@@ -199,17 +201,17 @@ function applyRecent(item) {
 
 function switchType(type) {
   form.value.intakeType = type
+  // 量不跟着预填：输液规格有 100/250/500，鼻饲有 200/500，猜一个就是在替护士编数据
+  form.value.amount = ''
   if (type === 'ORAL') {
     form.value.itemName = '水'
     form.value.subType = 'WATER'
   } else if (type === 'IV') {
     form.value.itemName = '静脉输液'
     form.value.subType = 'IV_FLUID'
-    form.value.amount = '250'
   } else if (type === 'NASOGASTRIC') {
     form.value.itemName = '鼻饲营养液'
     form.value.subType = 'TUBE_FEED'
-    form.value.amount = '200'
   }
 }
 
@@ -299,7 +301,7 @@ async function handleSubmit(continueMode) {
 
     if (continueMode) {
       uni.showToast({ title: `已记录 ${payload.amount}ml`, icon: 'none' })
-      // 时间自动跳到当前，量清空，品名保留（同一患者常连续记同类）
+      // 时间自动跳到当前，品名和量保留（同一患者常连续记同类同量，护士少点两下）
       setNow()
       form.value.remark = ''
     } else {

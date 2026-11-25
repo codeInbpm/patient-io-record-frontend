@@ -51,6 +51,18 @@ export function submitCorrectionRequestApi(data) {
 }
 
 /**
+ * 患者上报异常症状（血尿/黑便/水样便），护士端立即出现待处理
+ * 和「记错了」分开：这是病情信号，不是数据错误
+ */
+export function reportSymptomAlertApi(data) {
+  return request({
+    url: '/v1/fluid-records/symptom-alert',
+    method: 'POST',
+    data
+  })
+}
+
+/**
  * 护士端待核对列表
  */
 export function getCorrectionRequestsApi(wardId) {
@@ -69,6 +81,38 @@ export function handleCorrectionRequestApi(id) {
   return request({
     url: `/v1/fluid-records/correction-requests/${id}/handled`,
     method: 'POST'
+  })
+}
+
+/**
+ * 护士驳回：这条不算，退回给患者重新记
+ */
+export function rejectCorrectionRequestApi(id) {
+  return request({
+    url: `/v1/fluid-records/correction-requests/${id}/reject`,
+    method: 'POST'
+  })
+}
+
+/**
+ * 患者端：被退回、还没重记的条目
+ */
+export function getMyRejectedCorrectionsApi() {
+  return request({
+    url: '/v1/fluid-records/correction-requests/my-rejected',
+    method: 'GET',
+    silent: true
+  })
+}
+
+/**
+ * 患者重记完成，清掉这条待办
+ */
+export function markCorrectionReRecordedApi(id) {
+  return request({
+    url: `/v1/fluid-records/correction-requests/${id}/re-recorded`,
+    method: 'POST',
+    silent: true
   })
 }
 

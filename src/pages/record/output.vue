@@ -73,9 +73,9 @@
           </view>
         </view>
 
-        <!-- 性状 -->
+        <!-- 性状：必填。默认值会把血尿记成清亮，把黑便记成软便 -->
         <view class="form-group">
-          <text class="label">性状 / 颜色</text>
+          <text class="label">性状 / 颜色 *</text>
           <view class="nature-chips">
             <view
               :class="['nature-chip', form.natureOrColor === tag ? 'selected' : '']"
@@ -87,6 +87,9 @@
             </view>
           </view>
           <input class="input nature-input" v-model="form.natureOrColor" placeholder="也可自定义输入" />
+          <view class="nature-warn" v-if="isDangerNature">
+            这是要医生知道的信号，记录后请当面告知主管医生
+          </view>
         </view>
 
         <!-- 时间 -->
@@ -156,8 +159,10 @@ const recordTimePart = ref(formatTimeOnly(new Date()))
 const form = ref({
   patientId: null,
   outputType: 'URINE',
-  amount: '200',
-  natureOrColor: '淡黄色清亮',
+  // 量不预填：尿量 100 和 400 差 4 倍，猜一个数就是在替护士编数据
+  amount: '',
+  // 性状不预填：不选不许保存，避免血尿/黑便被默认成正常
+  natureOrColor: '',
   remark: ''
 })
 
@@ -170,6 +175,12 @@ const natureOptions = {
 }
 
 const currentNatureTags = computed(() => natureOptions[form.value.outputType] || [])
+
+// 出血性信号：记下来不等于处理了，得让医生知道
+const isDangerNature = computed(() => {
+  const v = form.value.natureOrColor || ''
+  return v.indexOf('血尿') > -1 || v.indexOf('黑便') > -1 || v.indexOf('带血') > -1 || v.indexOf('咖啡色') > -1
+})
 
 const typeLabel = computed(() => {
   if (form.value.outputType === 'STOOL') return '大便'
@@ -190,16 +201,9 @@ function applyRecent(item) {
 
 function switchType(type) {
   form.value.outputType = type
-  if (type === 'URINE') {
-    form.value.natureOrColor = '淡黄色清亮'
-    form.value.amount = '200'
-  } else if (type === 'STOOL') {
-    form.value.natureOrColor = '黄色软便'
-    form.value.amount = '150'
-  } else if (type === 'GASTRO_DRAINAGE') {
-    form.value.natureOrColor = '黄绿草绿色'
-    form.value.amount = '100'
-  }
+  // 量和性状都不预填：血尿被默认成「清亮」是这套系统里最危险的一种假数据
+  form.value.amount = ''
+  form.value.natureOrColor = ''
 }
 
 function adjustAmount(delta) {
@@ -229,6 +233,12 @@ function validate() {
   }
   if (amount > 10000) {
     uni.showToast({ title: '排出量超出合理范围，请核对', icon: 'none' })
+    return false
+  }
+  // 性状必须自己选：默认值会把血尿记成清亮，把黑便记成软便
+  if (!form.value.natureOrColor) {
+    const label = form.value.outputType === 'URINE' ? '尿的颜色' : (form.value.outputType === 'STOOL' ? '大便的性状' : '引流液的颜色')
+    uni.showToast({ title: `请选一下${label}`, icon: 'none' })
     return false
   }
   return true
@@ -524,6 +534,15 @@ onLoad((options) => {
   min-height: 80rpx;
   line-height: 80rpx;
   font-size: 28rpx;
+}
+
+.nature-warn {
+  margin-top: 12rpx;
+  padding: 12rpx 16rpx;
+  font-size: 26rpx;
+  color: #cf1322;
+  background: #fff1f0;
+  border-radius: 10rpx;
 }
 
 .time-picker-row {
