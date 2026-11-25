@@ -14,7 +14,25 @@
         <text>责任护士: {{ patient.assignedNurseName || '暂未分配' }}</text>
       </view>
       <view class="diag-text">诊断: {{ patient.diagnosis || '无' }}</view>
+
+      <view :class="['pulse-line', patient.isMissed ? 'warn' : '']">
+        <text class="pulse-dot"></text>
+        <text class="pulse-text">{{ lastRecordText }} · 今日已记录 {{ patient.todayRecordCount || 0 }} 笔</text>
+      </view>
     </view>
+
+    <StateView
+      v-if="loadState === 'loading' && !patient"
+      state="loading"
+      :skeleton-rows="2"
+    />
+    <StateView
+      v-else-if="loadState === 'error' && !patient"
+      state="error"
+      title="患者信息加载失败"
+      desc="请检查网络后重试"
+      @retry="loadData"
+    />
 
     <!-- 日期选择与导航 -->
     <view class="date-bar">
@@ -79,6 +97,11 @@
       </view>
     </view>
 
+    <!-- 近 7 天趋势：让「平衡」从一个数字变成走向 -->
+    <view class="trend-wrap">
+      <TrendBars :data="trendData" />
+    </view>
+
     <!-- 当日流水明细 -->
     <view class="timeline-section">
       <view class="timeline-header">
@@ -114,12 +137,27 @@
             <view class="t-remark" v-if="item.remark">备注: {{ item.remark }}</view>
           </view>
           <view class="t-line-action">
-            <text class="del-btn" @tap="handleDelete(item)">删除</text>
+            <text class="edit-btn" @tap.stop="openEdit(item)">改</text>
+            <text class="del-btn" @tap.stop="handleDelete(item)">删</text>
           </view>
         </view>
 
         <view class="empty-timeline" v-if="timelineItems.length === 0">
           <text>当日尚无出入量记录，请点击底部按钮录入</text>
+        </view>
+      </view>
+    </view>
+
+    <!-- 修正记录：先建新记录再删旧记录，避免护理数据出现空档 -->
+    <view class="modal-mask" v-if="showEditModal" @tap="showEditModal = false">
+      <view class="edit-modal" @tap.stop>
+        <text class="em-title">修正记录量</text>
+        <text class="em-sub">{{ editItem?.itemName }} · 原 {{ editItem?.amount }} ml</text>
+        <input class="em-input" type="digit" v-model="editAmount" placeholder="输入正确量 (ml)" />
+        <text class="em-hint">保存后将替换原记录，并在留痕中记为新记录</text>
+        <view class="em-actions">
+          <button class="em-btn cancel" @tap="showEditModal = false">取消</button>
+          <button class="em-btn confirm" :loading="editing" @tap="submitEdit">确认修正</button>
         </view>
       </view>
     </view>
@@ -148,18 +186,41 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { onLoad, onShow } from '@dcloudio/uni-app'
 import { useUserStore } from '../../stores/user'
 import { getPatientDetailApi } from '../../api/patient'
-import { getDailyBalanceApi, deleteIntakeApi, deleteOutputApi, exportFluidRecordsExcel } from '../../api/record'
-import { formatDate, formatTimeOnly } from '../../utils/date'
+import {
+  getDailyBalanceApi,
+  deleteIntakeApi,
+  deleteOutputApi,
+  exportFluidRecordsExcel,
+  getHistorySummariesApi,
+  recordIntakeApi,
+  recordOutputApi
+} from '../../api/record'
+import { formatDate, formatTimeOnly, formatSinceLastRecord } from '../../utils/date'
+import TrendBars from '../../components/TrendBars.vue'
+import StateView from '../../components/StateView.vue'
 
 const userStore = useUserStore()
 const patientId = ref(null)
 const patient = ref(null)
 const currentDate = ref(formatDate())
 const dailyData = ref(null)
+const loadState = ref('loading')
+const trendData = ref([])
+
+// 修正记录
+const showEditModal = ref(false)
+const editItem = ref(null)
+const editAmount = ref('')
+const editing = ref(false)
+
+const lastRecordText = computed(() => {
+  if (!patient.value) return ''
+  return formatSinceLastRecord(patient.value.lastRecordTime, patient.value.hoursSinceLastRecord)
+})
 
 const canRecord = computed(() => {
   if (userStore.isHeadNurse || userStore.isPatient) return true
@@ -191,14 +252,36 @@ function formatTime(str) {
 
 async function loadData() {
   if (!patientId.value) return
+  if (!patient.value) {
+    loadState.value = 'loading'
+  }
   try {
     const p = await getPatientDetailApi(patientId.value)
     patient.value = p
 
     const balance = await getDailyBalanceApi(patientId.value, currentDate.value)
     dailyData.value = balance
+    loadState.value = 'ready'
   } catch (e) {
     console.error(e)
+    if (!patient.value) {
+      loadState.value = 'error'
+    }
+  }
+}
+
+async function loadTrend() {
+  if (!patientId.value) return
+  try {
+    const list = await getHistorySummariesApi(patientId.value, 7)
+    trendData.value = (list || []).map(d => ({
+      date: d.recordDate,
+      intake: Number(d.totalIntake || 0),
+      output: Number(d.totalOutput || 0)
+    }))
+  } catch (e) {
+    console.error('加载趋势失败', e)
+    trendData.value = []
   }
 }
 
@@ -250,22 +333,104 @@ function handleExportExcel() {
   })
 }
 
+// 删除必须选原因，便于护士长事后追溯
 function handleDelete(item) {
-  uni.showModal({
-    title: '确认删除',
-    content: `确定要删除该条【${item.itemName} ${item.amount}ml】的记录吗？`,
-    success: async (res) => {
-      if (res.confirm) {
-        if (item.category === 'INTAKE') {
-          await deleteIntakeApi(item.id)
-        } else {
-          await deleteOutputApi(item.id)
+  const reasons = ['录入错误（患者/时间不对）', '数量填错', '重复录入', '医生要求删除']
+  uni.showActionSheet({
+    itemList: reasons,
+    success: (sheetRes) => {
+      const reason = reasons[sheetRes.tapIndex]
+      uni.showModal({
+        title: '确认删除',
+        content: `将删除【${item.itemName} ${item.amount}ml】\n删除原因：${reason}\n删除后会记录操作人与原因。`,
+        confirmColor: '#ff4d4f',
+        confirmText: '确认删除',
+        success: async (res) => {
+          if (!res.confirm) return
+          try {
+            if (item.category === 'INTAKE') {
+              await deleteIntakeApi(item.id, reason)
+            } else {
+              await deleteOutputApi(item.id, reason)
+            }
+            uni.showToast({ title: '已删除并留痕', icon: 'none' })
+            loadData()
+            loadTrend()
+          } catch (e) {
+            console.error('删除失败', e)
+          }
         }
-        uni.showToast({ title: '删除成功', icon: 'success' })
-        loadData()
-      }
+      })
     }
   })
+}
+
+function openEdit(item) {
+  if (!canRecord.value) {
+    uni.showToast({ title: '仅管辖护士可修正记录', icon: 'none' })
+    return
+  }
+  editItem.value = item
+  editAmount.value = String(item.amount || '')
+  showEditModal.value = true
+}
+
+function toApiTime(value) {
+  if (!value) return ''
+  return String(value).replace('T', ' ').substring(0, 19)
+}
+
+async function submitEdit() {
+  if (!editItem.value) return
+  const amount = Number(editAmount.value)
+  if (!amount || amount <= 0) {
+    uni.showToast({ title: '请输入正确的量', icon: 'none' })
+    return
+  }
+  if (amount === Number(editItem.value.amount)) {
+    showEditModal.value = false
+    return
+  }
+
+  editing.value = true
+  const item = editItem.value
+  try {
+    const recordTime = toApiTime(item.recordTime)
+    if (item.category === 'INTAKE') {
+      await recordIntakeApi({
+        patientId: patientId.value,
+        intakeType: item.type,
+        subType: item.subType || item.type,
+        itemName: item.itemName,
+        amount,
+        recordTime,
+        remark: item.remark || ''
+      })
+    } else {
+      await recordOutputApi({
+        patientId: patientId.value,
+        outputType: item.type,
+        amount,
+        natureOrColor: item.natureOrColor || '',
+        recordTime,
+        remark: item.remark || ''
+      })
+    }
+    // 新记录写入成功后再删旧记录，避免中途失败导致数据缺失
+    if (item.category === 'INTAKE') {
+      await deleteIntakeApi(item.id, '修正记录量')
+    } else {
+      await deleteOutputApi(item.id, '修正记录量')
+    }
+    uni.showToast({ title: '已修正', icon: 'success' })
+    showEditModal.value = false
+    loadData()
+    loadTrend()
+  } catch (e) {
+    console.error('修正失败', e)
+  } finally {
+    editing.value = false
+  }
 }
 
 onLoad((options) => {
@@ -276,13 +441,16 @@ onLoad((options) => {
 
 onShow(() => {
   loadData()
+  if (trendData.value.length === 0) {
+    loadTrend()
+  }
 })
 </script>
 
 <style>
 .container {
   padding: 24rpx;
-  padding-bottom: 160rpx;
+  padding-bottom: calc(200rpx + env(safe-area-inset-bottom));
 }
 
 .patient-header {
@@ -552,10 +720,127 @@ onShow(() => {
   margin-top: 6rpx;
 }
 
+.edit-btn {
+  font-size: 26rpx;
+  color: #1677ff;
+  padding: 10rpx 16rpx;
+}
+
 .del-btn {
-  font-size: 22rpx;
+  font-size: 26rpx;
   color: #ff4d4f;
-  padding: 8rpx 12rpx;
+  padding: 10rpx 16rpx;
+}
+
+.pulse-line {
+  display: flex;
+  align-items: center;
+  margin-top: 12rpx;
+  background: #f7f9fc;
+  border-radius: 10rpx;
+  padding: 10rpx 16rpx;
+}
+
+.pulse-line.warn {
+  background: #fff7e6;
+  border: 1rpx solid #ffe58f;
+}
+
+.pulse-dot {
+  width: 12rpx;
+  height: 12rpx;
+  border-radius: 50%;
+  background: #52c41a;
+  margin-right: 10rpx;
+}
+
+.pulse-line.warn .pulse-dot {
+  background: #fa8c16;
+}
+
+.pulse-text {
+  font-size: 26rpx;
+  color: #595959;
+}
+
+.trend-wrap {
+  margin-bottom: 20rpx;
+}
+
+.modal-mask {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+
+.edit-modal {
+  width: 84%;
+  background: #ffffff;
+  border-radius: 20rpx;
+  padding: 36rpx 32rpx;
+  display: flex;
+  flex-direction: column;
+}
+
+.em-title {
+  font-size: 34rpx;
+  font-weight: bold;
+  color: #1f2329;
+  text-align: center;
+}
+
+.em-sub {
+  font-size: 26rpx;
+  color: #8c8c8c;
+  text-align: center;
+  margin: 12rpx 0 24rpx;
+}
+
+.em-input {
+  height: 96rpx;
+  border: 2rpx solid #d9d9d9;
+  border-radius: 12rpx;
+  padding: 0 24rpx;
+  font-size: 40rpx;
+  font-weight: bold;
+  text-align: center;
+  color: #1677ff;
+}
+
+.em-hint {
+  font-size: 24rpx;
+  color: #bfbfbf;
+  margin-top: 14rpx;
+  line-height: 1.5;
+}
+
+.em-actions {
+  display: flex;
+  gap: 20rpx;
+  margin-top: 30rpx;
+}
+
+.em-btn {
+  flex: 1;
+  height: 84rpx;
+  line-height: 84rpx;
+  font-size: 30rpx;
+  border-radius: 42rpx;
+  margin: 0;
+}
+
+.em-btn.cancel {
+  background: #f5f7fa;
+  color: #595959;
+}
+
+.em-btn.confirm {
+  background: #1677ff;
+  color: #ffffff;
 }
 
 .empty-timeline {
@@ -571,7 +856,8 @@ onShow(() => {
   left: 0;
   right: 0;
   background: #ffffff;
-  padding: 16rpx 30rpx 24rpx;
+  padding: 16rpx 30rpx;
+  padding-bottom: calc(20rpx + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
   gap: 12rpx;

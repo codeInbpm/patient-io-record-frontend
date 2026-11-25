@@ -7,8 +7,14 @@
           <text class="ward-name">{{ currentWard?.wardName || '选择病区' }}</text>
           <text class="arrow-down">▼</text>
         </view>
-        <view class="role-pill" :class="userStore.isHeadNurse ? 'head' : 'nurse'">
-          {{ userStore.isHeadNurse ? '👩‍⚕️ 护士长视图 (全病区)' : '🩺 护士工作台' }}
+        <view class="header-actions">
+          <view class="add-patient-btn" @tap.stop="openAddPatientModal">
+            <text class="add-plus">＋</text>
+            <text>建档</text>
+          </view>
+          <view class="role-pill" :class="userStore.isHeadNurse ? 'head' : 'nurse'">
+            {{ userStore.isHeadNurse ? '护士长视图' : '护士工作台' }}
+          </view>
         </view>
       </view>
 
@@ -29,6 +35,26 @@
           <text class="stat-num color-danger">{{ overview.abnormalCount || 0 }}</text>
           <text class="stat-label">异常报警</text>
         </view>
+      </view>
+
+      <!-- 漏记哨兵：没有数据，整个系统就没有价值，这条必须最显眼 -->
+      <view class="missed-banner" v-if="missedPatientsCount > 0" @tap="toggleMissedFilter">
+        <text class="missed-icon">⏰</text>
+        <text class="missed-text">{{ missedPatientsCount }} 位患者超过 4 小时未记录</text>
+        <text class="missed-action">{{ patientFilterScope === 'missed' ? '取消筛选' : '查看名单 ›' }}</text>
+      </view>
+
+      <!-- 患者说记错了：不处理就等于把错误数据当成真的 -->
+      <view class="correction-banner" v-if="correctionList.length > 0" @tap="showCorrectionModal = true">
+        <text class="correction-icon">📝</text>
+        <text class="correction-text">{{ correctionList.length }} 条记录患者说记错了</text>
+        <text class="correction-action">去核对 ›</text>
+      </view>
+
+      <!-- 弱网离线队列：让护士知道记录没有丢 -->
+      <view class="offline-bar" v-if="offlinePending > 0" @tap="retryOffline">
+        <text class="offline-text">📶 {{ offlinePending }} 条记录待同步</text>
+        <text class="offline-retry">立即重试</text>
       </view>
 
       <!-- 快捷入口金刚区：补液监护 & 每日特殊交接本 -->
@@ -100,8 +126,21 @@
       </view>
     </view>
 
-    <!-- 病人列表 -->
-    <view class="patient-list">
+    <!-- 病人列表：加载 / 失败 / 空 三态区分，避免把断网显示成「没有病人」 -->
+    <StateView
+      v-if="loadState === 'loading'"
+      state="loading"
+      :skeleton-rows="4"
+    />
+    <StateView
+      v-else-if="loadState === 'error'"
+      state="error"
+      title="病区数据加载失败"
+      desc="网络不稳定或服务暂时不可用，点击下方按钮重试"
+      @retry="reloadCurrentWard"
+    />
+
+    <view class="patient-list" v-else>
       <view 
         class="patient-card" 
         v-for="p in displayPatientList" 
@@ -162,38 +201,29 @@
           </view>
         </view>
 
-        <!-- 快捷操作按钮 -->
+        <!-- 记录活跃度：一眼看出谁可能漏记 -->
+        <view :class="['record-pulse', p.isMissed ? 'missed' : '']">
+          <text class="pulse-dot" :class="p.isMissed ? 'dot-warn' : 'dot-ok'"></text>
+          <text class="pulse-text">{{ recordPulseText(p) }}</text>
+        </view>
+
+        <!-- 快捷操作：只留两个高频动作，其余收进「更多」，避免误触出院 -->
         <view class="card-actions" @tap.stop>
           <button 
             :class="['quick-btn', 'in', (p.isMyDuty || userStore.isHeadNurse) ? '' : 'btn-disabled']" 
             size="mini" 
             @tap="handleCardRecord(p, 'intake')"
           >
-            + 记入量
+            ＋ 记入量
           </button>
           <button 
             :class="['quick-btn', 'out', (p.isMyDuty || userStore.isHeadNurse) ? '' : 'btn-disabled']" 
             size="mini" 
             @tap="handleCardRecord(p, 'output')"
           >
-            + 记出量
+            ＋ 记出量
           </button>
-          <button 
-            :class="['quick-btn', 'infusion', (p.isMyDuty || userStore.isHeadNurse) ? '' : 'btn-disabled']" 
-            size="mini" 
-            @tap="handleCardInfusion(p)"
-          >
-            + 记补液
-          </button>
-          <button class="quick-btn view" size="mini" @tap="goToDetail(p.id)">流水详情</button>
-          <button 
-            v-if="userStore.isHeadNurse" 
-            class="quick-btn discharge" 
-            size="mini" 
-            @tap="handleDischarge(p)"
-          >
-            出院
-          </button>
+          <button class="quick-btn more" size="mini" @tap="openMoreActions(p)">更多 ⋯</button>
         </view>
       </view>
 
@@ -204,11 +234,21 @@
           <text class="empty-alert-desc">24小时少尿(＜400ml)、差值过大(＞1000ml)与高容量输液(＞3000ml)指标均处于安全范围</text>
           <button class="m-btn small primary back-all-btn" @tap="patientFilterScope = userStore.isHeadNurse ? 'all' : 'my'">返回查看病患列表</button>
         </view>
-        <text v-else-if="userStore.isHeadNurse">该病区暂无在院病人，请点击右上角【+ 病人建档】添加</text>
+        <view class="empty-alert-box" v-else-if="patientFilterScope === 'missed'">
+          <text class="empty-alert-icon">✅</text>
+          <text class="empty-alert-title">全部患者 4 小时内均有记录</text>
+          <text class="empty-alert-desc">当前没有需要补记的患者</text>
+          <button class="m-btn small primary back-all-btn" @tap="patientFilterScope = userStore.isHeadNurse ? 'all' : 'my'">返回查看病患列表</button>
+        </view>
+        <view v-else-if="userStore.isHeadNurse" class="empty-nurse-box">
+          <text class="empty-nurse-text">该病区暂无在院病人</text>
+          <button class="m-btn small primary empty-claim-btn" @tap="openAddPatientModal">＋ 建档录入病人</button>
+        </view>
         <view v-else class="empty-nurse-box">
           <text class="empty-nurse-text" v-if="patientFilterScope === 'my'">您当前在管床位暂无在院病人，或尚未认领当班床位</text>
           <text class="empty-nurse-text" v-else>该病房暂无在院病人</text>
           <button class="m-btn small primary empty-claim-btn" @tap="openDutyBedModal">👉 点击选择管辖床位</button>
+          <button class="m-btn small outline empty-claim-btn" @tap="openAddPatientModal">＋ 建档录入病人</button>
         </view>
       </view>
     </view>
@@ -467,6 +507,34 @@
       </view>
     </view>
 
+    <!-- 待核对记录弹窗 -->
+    <view class="modal-mask" v-if="showCorrectionModal" @tap="showCorrectionModal = false">
+      <view class="correction-modal" @tap.stop>
+        <view class="cm-head">
+          <text class="cm-title">待核对记录 ({{ correctionList.length }})</text>
+          <text class="cm-close" @tap="showCorrectionModal = false">✕</text>
+        </view>
+        <scroll-view scroll-y class="cm-body">
+          <view class="cm-item" v-for="c in correctionList" :key="c.id">
+            <view class="cm-line1">
+              <text class="cm-bed">{{ c.bedNo }}</text>
+              <text class="cm-name">{{ c.patientName }}</text>
+              <text class="cm-time">{{ (c.recordTime || '').substring(11, 16) }}</text>
+            </view>
+            <view class="cm-line2">
+              {{ c.category === 'INTAKE' ? '喝的' : '排的' }} {{ c.amount }}ml · {{ c.itemName }}
+            </view>
+            <view class="cm-reason">患者说：{{ c.reason || '没说明原因' }}</view>
+            <view class="cm-actions">
+              <text class="cm-btn ghost" @tap="dismissCorrection(c)">确认无误</text>
+              <text class="cm-btn primary" @tap="goFixCorrection(c)">去修改 ›</text>
+            </view>
+          </view>
+          <view class="cm-empty" v-if="correctionList.length === 0">暂无待核对记录</view>
+        </scroll-view>
+      </view>
+    </view>
+
     <!-- 切换病房弹窗（支持查看全部科室/病区） -->
     <view class="modal-mask" v-if="showWardModal" @tap="showWardModal = false">
       <view class="ward-modal-box" @tap.stop>
@@ -570,9 +638,12 @@ import { getBedsByWardApi, createBedApi } from '../../api/bed'
 import { getPatientsApi, createPatientApi, assignNurseApi, dischargePatientApi } from '../../api/patient'
 import { getActiveNursesApi } from '../../api/auth'
 import { getMyAssignmentsApi, claimMyDutyBedsApi } from '../../api/nurse'
-import { formatDate } from '../../utils/date'
+import { getCorrectionRequestsApi, handleCorrectionRequestApi } from '../../api/record'
+import { formatDate, formatSinceLastRecord } from '../../utils/date'
 import { syncRoleTabBar } from '../../utils/tabbar'
+import { queueCount, flushQueue } from '../../utils/offline'
 import CustomTabBar from '../../components/CustomTabBar.vue'
+import StateView from '../../components/StateView.vue'
 
 const userStore = useUserStore()
 const wardList = ref([])
@@ -580,6 +651,48 @@ const currentWard = ref(null)
 const overview = ref(null)
 const patientList = ref([])
 const patientFilterScope = ref('my') // 护士默认聚焦在“我管辖的”
+const loadState = ref('loading') // loading | error | ready
+const offlinePending = ref(queueCount())
+
+// 患者反馈「记错了」的待核对列表
+const correctionList = ref([])
+const showCorrectionModal = ref(false)
+
+async function loadCorrections(wardId) {
+  if (!wardId) return
+  try {
+    const list = await getCorrectionRequestsApi(wardId)
+    correctionList.value = list || []
+  } catch (e) {
+    // 拉不到不影响主流程，下一次刷新再试
+    correctionList.value = []
+  }
+}
+
+// 护士确认这条没问题
+async function dismissCorrection(item) {
+  try {
+    await handleCorrectionRequestApi(item.id)
+    correctionList.value = correctionList.value.filter(c => c.id !== item.id)
+    uni.showToast({ title: '已标记确认无误', icon: 'none' })
+  } catch (e) {
+    console.error('处理核对请求失败', e)
+  }
+}
+
+// 去患者详情修正（那里有改/删，且会留痕）
+async function goFixCorrection(item) {
+  showCorrectionModal.value = false
+  uni.navigateTo({ url: `/pages/patient/detail?patientId=${item.patientId}` })
+}
+
+async function retryOffline() {
+  uni.showLoading({ title: '正在补传…' })
+  await flushQueue()
+  uni.hideLoading()
+  offlinePending.value = queueCount()
+  await reloadCurrentWard()
+}
 
 const allPatientsCount = computed(() => patientList.value.length)
 
@@ -596,15 +709,61 @@ const abnormalPatientsCount = computed(() => {
   return patientList.value.filter(p => p.isAbnormal).length
 })
 
+// 漏记哨兵：超过 4 小时（或今日完全没记）需要补记的患者
+const missedPatientsCount = computed(() => {
+  return patientList.value.filter(p => p.isMissed).length
+})
+
 const displayPatientList = computed(() => {
   if (patientFilterScope.value === 'abnormal') {
     return patientList.value.filter(p => p.isAbnormal)
+  }
+  if (patientFilterScope.value === 'missed') {
+    return patientList.value.filter(p => p.isMissed)
   }
   if (userStore.isHeadNurse || patientFilterScope.value === 'all') {
     return patientList.value
   }
   return patientList.value.filter(p => p.isMyDuty)
 })
+
+function toggleMissedFilter() {
+  patientFilterScope.value = patientFilterScope.value === 'missed'
+    ? (userStore.isHeadNurse ? 'all' : 'my')
+    : 'missed'
+}
+
+function recordPulseText(p) {
+  const base = formatSinceLastRecord(p.lastRecordTime, p.hoursSinceLastRecord)
+  const count = p.todayRecordCount || 0
+  if (p.isMissed) {
+    return `${base} · 今日 ${count} 笔 · 建议补记`
+  }
+  return `${base} · 今日 ${count} 笔`
+}
+
+// 卡片「更多」：低频操作收进 ActionSheet，避免误触出院
+function openMoreActions(p) {
+  const itemList = ['记补液', '查看流水详情']
+  if (userStore.isHeadNurse) {
+    itemList.push('分配责任护士', '办理出院')
+  }
+  uni.showActionSheet({
+    itemList,
+    success: (res) => {
+      const label = itemList[res.tapIndex]
+      if (label === '记补液') {
+        handleCardInfusion(p)
+      } else if (label === '查看流水详情') {
+        goToDetail(p.id)
+      } else if (label === '分配责任护士') {
+        openAssignModal(p)
+      } else if (label === '办理出院') {
+        handleDischarge(p)
+      }
+    }
+  })
+}
 
 // 仿Pad端：管辖床位选择弹窗状态
 const showDutyBedModal = ref(false)
@@ -736,7 +895,15 @@ async function checkLoginAndLoad() {
 }
 
 async function loadWardsAndData() {
-  const wards = await getWardsApi({ status: 1 })
+  loadState.value = 'loading'
+  let wards = []
+  try {
+    wards = await getWardsApi({ status: 1 })
+  } catch (e) {
+    console.error('加载病区失败', e)
+    loadState.value = 'error'
+    return
+  }
   // 确保工作台切换病区弹窗只显示正常启用的病区
   wardList.value = (wards || []).filter(w => w.status === undefined || w.status === 1)
   if (wardList.value && wardList.value.length > 0) {
@@ -774,12 +941,28 @@ async function loadWardsAndData() {
 }
 
 async function loadWardData(wardId) {
+  if (!wardId) return
+  if (!patientList.value.length) {
+    loadState.value = 'loading'
+  }
   try {
     const data = await getWardOverviewApi(wardId)
     overview.value = data
     patientList.value = data.patients || []
+    loadState.value = 'ready'
+    loadCorrections(wardId)
   } catch (e) {
     console.error(e)
+    // 只有首次加载（还没有任何数据）才整页报错，刷新失败保留旧数据
+    if (!patientList.value.length) {
+      loadState.value = 'error'
+    }
+  }
+}
+
+function reloadCurrentWard() {
+  if (currentWard.value) {
+    loadWardData(currentWard.value.id)
   }
 }
 
@@ -1023,8 +1206,9 @@ async function loadAvailableBeds(wardId) {
     const beds = await getBedsByWardApi(wardId)
     // 筛选当前病区的空床
     availableBeds.value = (beds || []).filter(b => b.status === 0)
-    selectedBed.value = availableBeds.value.length > 0 ? availableBeds.value[0] : null
-    formPatient.value.bedId = selectedBed.value ? selectedBed.value.id : null
+    // 床位必须由录入人亲自选择，避免默认占用第一张空床
+    selectedBed.value = null
+    formPatient.value.bedId = null
   } catch (e) {
     console.error('加载空床异常', e)
     availableBeds.value = []
@@ -1127,6 +1311,7 @@ onMounted(() => {
 
 onShow(() => {
   syncRoleTabBar()
+  offlinePending.value = queueCount()
   if (userStore.isPatient) {
     uni.switchTab({ url: '/pages/patient-view/home' })
     return
@@ -1195,6 +1380,116 @@ onPullDownRefresh(async () => {
 .role-pill.nurse {
   background: #52c41a;
   color: #ffffff;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+
+/* 建档入口：护士现场最常用的动作，必须一直可见 */
+.add-patient-btn {
+  display: flex;
+  align-items: center;
+  background: #ffffff;
+  color: #1677ff;
+  font-size: 26rpx;
+  font-weight: bold;
+  border-radius: 30rpx;
+  padding: 8rpx 22rpx;
+  min-height: 56rpx;
+}
+
+.add-plus {
+  font-size: 30rpx;
+  margin-right: 2rpx;
+}
+
+.missed-banner {
+  display: flex;
+  align-items: center;
+  background: #fff7e6;
+  border: 1rpx solid #ffd591;
+  border-radius: 12rpx;
+  padding: 16rpx 20rpx;
+  margin-top: 16rpx;
+}
+
+.missed-icon {
+  font-size: 30rpx;
+  margin-right: 10rpx;
+}
+
+.missed-text {
+  flex: 1;
+  font-size: 26rpx;
+  color: #ad4e00;
+  font-weight: 500;
+}
+
+.missed-action {
+  font-size: 26rpx;
+  color: #d46b08;
+  font-weight: bold;
+}
+
+.record-pulse {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16rpx;
+  background: #f7f9fc;
+  border-radius: 10rpx;
+  padding: 10rpx 16rpx;
+}
+
+.record-pulse.missed {
+  background: #fff7e6;
+  border: 1rpx solid #ffe58f;
+}
+
+.pulse-dot {
+  width: 12rpx;
+  height: 12rpx;
+  border-radius: 50%;
+  margin-right: 10rpx;
+  flex-shrink: 0;
+}
+
+.dot-ok { background: #52c41a; }
+.dot-warn { background: #fa8c16; }
+
+.pulse-text {
+  font-size: 24rpx;
+  color: #595959;
+  flex: 1;
+}
+
+.record-pulse.missed .pulse-text {
+  color: #ad4e00;
+  font-weight: 500;
+}
+
+.offline-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #e6f4ff;
+  border: 1rpx solid #91caff;
+  border-radius: 12rpx;
+  padding: 14rpx 20rpx;
+  margin-top: 12rpx;
+}
+
+.offline-text {
+  font-size: 26rpx;
+  color: #0958d9;
+}
+
+.offline-retry {
+  font-size: 26rpx;
+  color: #1677ff;
+  font-weight: bold;
 }
 
 .stats-row {
@@ -1392,7 +1687,7 @@ onPullDownRefresh(async () => {
 }
 
 .hospital-no {
-  font-size: 24rpx;
+  font-size: 26rpx;
   color: #8c8c8c;
   margin-left: 8rpx;
 }
@@ -1404,7 +1699,7 @@ onPullDownRefresh(async () => {
 }
 
 .tag {
-  font-size: 20rpx;
+  font-size: 22rpx;
   padding: 2rpx 10rpx;
   border-radius: 6rpx;
 }
@@ -1459,7 +1754,7 @@ onPullDownRefresh(async () => {
 .nurse-line {
   display: flex;
   align-items: center;
-  font-size: 24rpx;
+  font-size: 26rpx;
   margin-bottom: 8rpx;
 }
 
@@ -1486,7 +1781,7 @@ onPullDownRefresh(async () => {
 }
 
 .diag-line {
-  font-size: 24rpx;
+  font-size: 26rpx;
   color: #595959;
   margin-bottom: 16rpx;
 }
@@ -1504,7 +1799,7 @@ onPullDownRefresh(async () => {
 .io-col {
   display: flex;
   align-items: center;
-  font-size: 24rpx;
+  font-size: 26rpx;
 }
 
 .alert-red-text {
@@ -1526,9 +1821,18 @@ onPullDownRefresh(async () => {
 }
 
 .quick-btn {
-  font-size: 24rpx;
+  font-size: 26rpx;
   margin: 0;
   border-radius: 24rpx;
+  min-height: 64rpx;
+  line-height: 64rpx;
+  padding: 0 24rpx;
+}
+
+.quick-btn.more {
+  background: #f5f7fa;
+  color: #595959;
+  border: 1px solid #d9d9d9;
 }
 
 .quick-btn.in {
@@ -1638,6 +1942,151 @@ onPullDownRefresh(async () => {
 }
 
 /* 弹窗样式 */
+.correction-banner {
+  display: flex;
+  align-items: center;
+  background: #fff7e6;
+  border: 1rpx solid #ffd591;
+  border-radius: 12rpx;
+  padding: 16rpx 20rpx;
+  margin-top: 14rpx;
+}
+
+.correction-icon {
+  font-size: 30rpx;
+  margin-right: 10rpx;
+}
+
+.correction-text {
+  flex: 1;
+  font-size: 28rpx;
+  color: #ad4e00;
+  font-weight: 500;
+}
+
+.correction-action {
+  font-size: 26rpx;
+  color: #d46b08;
+  font-weight: bold;
+}
+
+.correction-modal {
+  width: 88%;
+  max-height: 78vh;
+  background: #ffffff;
+  border-radius: 20rpx;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cm-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 28rpx 28rpx 20rpx;
+  border-bottom: 1rpx solid #f2f4f7;
+}
+
+.cm-title {
+  font-size: 32rpx;
+  font-weight: bold;
+  color: #1f2329;
+}
+
+.cm-close {
+  font-size: 32rpx;
+  color: #8c8c8c;
+  padding: 0 8rpx;
+}
+
+.cm-body {
+  height: 62vh;
+  padding: 10rpx 24rpx 24rpx;
+}
+
+.cm-item {
+  border: 1rpx solid #eef0f4;
+  border-radius: 14rpx;
+  padding: 20rpx;
+  margin-top: 18rpx;
+  background: #fafbfc;
+}
+
+.cm-line1 {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10rpx;
+}
+
+.cm-bed {
+  background: #1677ff;
+  color: #ffffff;
+  font-size: 24rpx;
+  font-weight: bold;
+  padding: 4rpx 12rpx;
+  border-radius: 6rpx;
+  margin-right: 10rpx;
+}
+
+.cm-name {
+  font-size: 30rpx;
+  font-weight: bold;
+  color: #1f2329;
+  flex: 1;
+}
+
+.cm-time {
+  font-size: 26rpx;
+  color: #8c8c8c;
+}
+
+.cm-line2 {
+  font-size: 28rpx;
+  color: #1f2329;
+  margin-bottom: 10rpx;
+}
+
+.cm-reason {
+  font-size: 26rpx;
+  color: #cf1322;
+  background: #fff1f0;
+  border-radius: 8rpx;
+  padding: 10rpx 14rpx;
+}
+
+.cm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 16rpx;
+  margin-top: 16rpx;
+}
+
+.cm-btn {
+  font-size: 28rpx;
+  border-radius: 30rpx;
+  padding: 12rpx 28rpx;
+}
+
+.cm-btn.ghost {
+  color: #595959;
+  background: #f5f7fa;
+  border: 1rpx solid #e5e9f0;
+}
+
+.cm-btn.primary {
+  color: #ffffff;
+  background: #1677ff;
+  font-weight: bold;
+}
+
+.cm-empty {
+  text-align: center;
+  font-size: 28rpx;
+  color: #bfbfbf;
+  padding: 60rpx 0;
+}
+
 .modal-mask {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;

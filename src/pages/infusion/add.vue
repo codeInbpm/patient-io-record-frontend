@@ -177,7 +177,18 @@ const formatDateTime = (d) => {
 }
 
 onLoad((options) => {
-  const patientId = options.patientId || 1
+  // 绝不使用默认患者：缺参数直接拦回，避免补液被记到别的患者头上
+  if (!options.patientId) {
+    uni.showModal({
+      title: '无法登记',
+      content: '未获取到患者信息，请返回工作台重新进入。',
+      showCancel: false,
+      success: () => uni.navigateBack()
+    })
+    return
+  }
+
+  const patientId = options.patientId
   form.patientId = Number(patientId)
 
   // 初始化时间
@@ -194,7 +205,7 @@ onLoad((options) => {
 
   if (patientName) {
     patientInfo.value = {
-      id: patientId,
+      id: Number(patientId),
       bedNo: bedNo,
       patientName: patientName,
       hospitalNo: hospitalNo
@@ -347,7 +358,7 @@ const handleSubmit = async () => {
   background-color: #f5f7fa;
   min-height: 100vh;
   box-sizing: border-box;
-  padding-bottom: 140rpx;
+  padding-bottom: calc(160rpx + env(safe-area-inset-bottom));
 }
 
 .patient-banner {
@@ -592,6 +603,7 @@ const handleSubmit = async () => {
   right: 0;
   background: #ffffff;
   padding: 20rpx 24rpx;
+  padding-bottom: calc(20rpx + env(safe-area-inset-bottom));
   box-shadow: 0 -4rpx 16rpx rgba(0, 0, 0, 0.06);
 }
 

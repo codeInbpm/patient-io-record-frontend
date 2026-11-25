@@ -269,7 +269,8 @@
         </view>
 
         <view class="picker-actions">
-          <button class="confirm-btn" @tap="confirmQuickAdd">加入记录</button>
+          <button class="continue-btn" @tap="confirmQuickAdd(false)">加入并继续</button>
+          <button class="confirm-btn" @tap="confirmQuickAdd()">加入并关闭</button>
         </view>
       </view>
     </view>
@@ -422,15 +423,16 @@ const pipeConfigs = [
 const showPickerModal = ref(false)
 const pickerType = ref('')
 const currentPickerTitle = ref('')
-const tempInput = ref('38.2')
-const bpHigh = ref('145')
-const bpLow = ref('90')
+// 默认值必须为空：预填假数据会被误当成真实体征写入交班记录
+const tempInput = ref('')
+const bpHigh = ref('')
+const bpLow = ref('')
 const sugarType = ref('空腹')
-const sugarVal = ref('10.5')
-const urineVal = ref('200')
-const laxativeTime = ref('14:00')
-const laxativeName = ref('复方聚乙二醇')
-const maintFluidTime = ref('14:00')
+const sugarVal = ref('')
+const urineVal = ref('')
+const laxativeTime = ref('')
+const laxativeName = ref('')
+const maintFluidTime = ref('')
 const maintFluidDrug = ref('')
 
 // 交班提交弹窗状态
@@ -563,7 +565,7 @@ const openQuickPicker = (type, pipeKey = '', pipeName = '') => {
   showPickerModal.value = true
 }
 
-const confirmQuickAdd = () => {
+const confirmQuickAdd = (closeAfter = true) => {
   if (!selectedPatient.value) {
     uni.showToast({ title: '请先点选床位', icon: 'none' })
     return
@@ -606,18 +608,55 @@ const confirmQuickAdd = () => {
       return
     }
     tempList.value.push({ ...base, val })
+    tempInput.value = '' 
   } else if (pickerType.value === 'bp') {
-    bpList.value.push({ ...base, val: `${bpHigh.value}-${bpLow.value}` })
+    const high = Number(bpHigh.value)
+    const low = Number(bpLow.value)
+    if (!bpHigh.value || !bpLow.value) {
+      uni.showToast({ title: '请填写收缩压与舒张压', icon: 'none' })
+      return
+    }
+    if (high < 40 || high > 300 || low < 20 || low > 200) {
+      uni.showToast({ title: '血压数值不合理，请核对', icon: 'none' })
+      return
+    }
+    if (high <= low) {
+      uni.showToast({ title: '收缩压应高于舒张压', icon: 'none' })
+      return
+    }
+    bpList.value.push({ ...base, val: `${high}-${low}` })
+    bpHigh.value = ''
+    bpLow.value = ''
   } else if (pickerType.value === 'sugar') {
-    sugarList.value.push({ ...base, type: sugarType.value, val: Number(sugarVal.value) })
+    const val = Number(sugarVal.value)
+    if (!sugarVal.value || isNaN(val) || val <= 0 || val > 40) {
+      uni.showToast({ title: '请输入有效血糖值 (mmol/L)', icon: 'none' })
+      return
+    }
+    sugarList.value.push({ ...base, type: sugarType.value, val })
+    sugarVal.value = ''
   } else if (pickerType.value === 'urine') {
-    urineList.value.push({ ...base, val: Number(urineVal.value) })
+    const val = Number(urineVal.value)
+    if (!urineVal.value || isNaN(val) || val <= 0) {
+      uni.showToast({ title: '请输入尿量 (ml)', icon: 'none' })
+      return
+    }
+    urineList.value.push({ ...base, val })
+    urineVal.value = ''
   } else if (pickerType.value === 'laxative') {
-    laxativeList.value.push({ ...base, time: laxativeTime.value, name: laxativeName.value })
+    if (!laxativeTime.value.trim() || !laxativeName.value.trim()) {
+      uni.showToast({ title: '请填写服药时间与药名', icon: 'none' })
+      return
+    }
+    laxativeList.value.push({ ...base, time: laxativeTime.value.trim(), name: laxativeName.value.trim() })
+    laxativeTime.value = ''
+    laxativeName.value = ''
   }
 
-  showPickerModal.value = false
-  uni.showToast({ title: '已加入', icon: 'success' })
+  if (closeAfter) {
+    showPickerModal.value = false
+  }
+  uni.showToast({ title: `已记给 ${base.bedNo} ${base.patientName}`, icon: 'none' })
 }
 
 // 保存草稿
@@ -1226,9 +1265,22 @@ const handleSign = async () => {
 
 .picker-actions {
   margin-top: 32rpx;
+  display: flex;
+  gap: 20rpx;
+}
+
+.continue-btn {
+  flex: 1;
+  background: #f0f7ff;
+  color: #1677ff;
+  border: 1rpx solid #91caff;
+  border-radius: 44rpx;
+  font-size: 30rpx;
+  font-weight: 500;
 }
 
 .confirm-btn {
+  flex: 1;
   background: #1677ff;
   color: #ffffff;
   font-size: 28rpx;

@@ -27,7 +27,7 @@
         </view>
 
         <view class="nc-meta-line">
-          <text class="meta-item">🏥 {{ nurse.hospitalName || '上海市第一人民医院' }}</text>
+          <text class="meta-item">🏥 {{ nurse.hospitalName || '未关联医院' }}</text>
           <text class="meta-item">🩺 {{ nurse.department || '心血管内科' }}</text>
           <text class="meta-item" v-if="nurse.phone">📞 {{ nurse.phone }}</text>
         </view>

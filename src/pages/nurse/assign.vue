@@ -33,7 +33,16 @@
     </view>
 
     <!-- 床位网格选择区域 -->
-    <view class="bed-grid" v-if="bedList.length > 0">
+    <StateView v-if="loadState === 'loading'" state="loading" :skeleton-rows="3" />
+    <StateView
+      v-else-if="loadState === 'error'"
+      state="error"
+      title="床位加载失败"
+      desc="无法获取该病区床位，请重试"
+      @retry="reload"
+    />
+
+    <view class="bed-grid" v-else-if="bedList.length > 0">
       <view 
         v-for="bed in bedList" 
         :key="bed.bedId"
@@ -82,6 +91,10 @@ import { ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { getWardsApi } from '../../api/ward'
 import { getNurseAssignmentsApi, assignNurseBedsApi } from '../../api/nurse'
+import { useUserStore } from '../../stores/user'
+import StateView from '../../components/StateView.vue'
+
+const userStore = useUserStore()
 
 const nurseId = ref(null)
 const nurseName = ref('')
@@ -92,16 +105,28 @@ const currentWard = ref(null)
 const bedList = ref([])
 const selectedBedIds = ref([])
 const saving = ref(false)
+const loadState = ref('loading')
 
 onLoad(async (options) => {
   nurseId.value = options.nurseId ? Number(options.nurseId) : null
   nurseName.value = options.nurseName ? decodeURIComponent(options.nurseName) : ''
   jobNumber.value = options.jobNumber || ''
 
+  if (!nurseId.value) {
+    uni.showModal({
+      title: '参数缺失',
+      content: '未获取到护士信息，请返回列表重新进入。',
+      showCancel: false,
+      success: () => uni.navigateBack()
+    })
+    return
+  }
+
   await loadWards()
 })
 
 async function loadWards() {
+  loadState.value = 'loading'
   try {
     const list = await getWardsApi()
     wardList.value = list || []
@@ -112,14 +137,26 @@ async function loadWards() {
       }
       currentWard.value = targetWard || wardList.value[0]
       await loadAssignments(currentWard.value.id)
+    } else {
+      loadState.value = 'ready'
     }
   } catch (e) {
     console.error(e)
+    loadState.value = 'error'
+  }
+}
+
+function reload() {
+  if (currentWard.value) {
+    loadAssignments(currentWard.value.id)
+  } else {
+    loadWards()
   }
 }
 
 async function loadAssignments(wardId) {
   if (!nurseId.value || !wardId) return
+  loadState.value = 'loading'
   try {
     const res = await getNurseAssignmentsApi(nurseId.value, wardId)
     bedList.value = res?.beds || []
@@ -127,8 +164,10 @@ async function loadAssignments(wardId) {
     selectedBedIds.value = bedList.value
       .filter(b => b.isAssignedToThisNurse)
       .map(b => b.bedId)
+    loadState.value = 'ready'
   } catch (e) {
     console.error(e)
+    loadState.value = 'error'
   }
 }
 
@@ -186,7 +225,7 @@ async function handleSaveAssignment() {
   min-height: 100vh;
   background-color: #f5f7fa;
   padding: 24rpx;
-  padding-bottom: 140rpx;
+  padding-bottom: calc(150rpx + env(safe-area-inset-bottom));
   box-sizing: border-box;
 }
 
@@ -408,13 +447,14 @@ async function handleSaveAssignment() {
   bottom: 0;
   left: 0;
   right: 0;
-  height: 110rpx;
+  min-height: 110rpx;
   background-color: #ffffff;
   box-shadow: 0 -4rpx 16rpx rgba(0, 0, 0, 0.06);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0 32rpx;
+  padding: 12rpx 32rpx;
+  padding-bottom: calc(12rpx + env(safe-area-inset-bottom));
   z-index: 99;
 }
 

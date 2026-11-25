@@ -1,4 +1,5 @@
 import request from '../utils/request'
+import { getBaseUrl } from '../config'
 
 export function recordIntakeApi(data) {
   return request({
@@ -16,16 +17,16 @@ export function recordOutputApi(data) {
   })
 }
 
-export function deleteIntakeApi(recordId) {
+export function deleteIntakeApi(recordId, reason) {
   return request({
-    url: `/v1/fluid-records/intake/${recordId}`,
+    url: `/v1/fluid-records/intake/${recordId}${reason ? '?reason=' + encodeURIComponent(reason) : ''}`,
     method: 'DELETE'
   })
 }
 
-export function deleteOutputApi(recordId) {
+export function deleteOutputApi(recordId, reason) {
   return request({
-    url: `/v1/fluid-records/output/${recordId}`,
+    url: `/v1/fluid-records/output/${recordId}${reason ? '?reason=' + encodeURIComponent(reason) : ''}`,
     method: 'DELETE'
   })
 }
@@ -35,6 +36,39 @@ export function getDailyBalanceApi(patientId, date) {
   return request({
     url: `/v1/fluid-records/daily-balance?patientId=${patientId}${dateParam}`,
     method: 'GET'
+  })
+}
+
+/**
+ * 患者反馈「这条记错了」，由护士核对修正
+ */
+export function submitCorrectionRequestApi(data) {
+  return request({
+    url: '/v1/fluid-records/correction-request',
+    method: 'POST',
+    data
+  })
+}
+
+/**
+ * 护士端待核对列表
+ */
+export function getCorrectionRequestsApi(wardId) {
+  const wardParam = wardId ? `&wardId=${wardId}` : ''
+  return request({
+    url: `/v1/fluid-records/correction-requests?status=PENDING${wardParam}`,
+    method: 'GET',
+    silent: true
+  })
+}
+
+/**
+ * 护士处理完标记已处理
+ */
+export function handleCorrectionRequestApi(id) {
+  return request({
+    url: `/v1/fluid-records/correction-requests/${id}/handled`,
+    method: 'POST'
   })
 }
 
@@ -90,7 +124,7 @@ export function exportFluidRecordsExcel(params) {
     }
     
     const queryStr = queryParts.length > 0 ? `?${queryParts.join('&')}` : ''
-    const url = `http://localhost:8080/api/v1/fluid-records/export-excel${queryStr}`
+    const url = `${getBaseUrl()}/v1/fluid-records/export-excel${queryStr}`
 
     uni.showLoading({ title: '正在生成报表...', mask: true })
 

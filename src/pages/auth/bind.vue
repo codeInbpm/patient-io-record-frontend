@@ -63,7 +63,7 @@
         />
       </view>
 
-      <view class="preset-tip">
+      <view class="preset-tip" v-if="showDemo">
         <text class="p-title">💡 提示：系统预置演示工号</text>
         <text class="p-item" @tap="fillDemoNurse('100001')">• 护士长工号：100001 (张洁护士长，拥有全部管理权限)</text>
         <text class="p-item" @tap="fillDemoNurse('100002')">• 护士工号：100002 (李丽护士，负责01床)</text>
@@ -78,7 +78,7 @@
     <!-- 患者/家属绑定表单 -->
     <view class="form-card" v-if="activeTab === 'patient'">
       <view class="form-desc">
-        根据临床安全规范，请填写住院病患真实姓名、所属楼宇/病区、床位号及住院号，系统将进行精确核验。
+        填写住院时的姓名、病区和床位号，核对无误就能开始记录。
       </view>
 
       <!-- 1. 真实姓名 -->
@@ -89,10 +89,10 @@
 
       <!-- 2. 所属楼宇/病区（已启用） -->
       <view class="input-group">
-        <text class="label">所属楼宇/病区 (已启用) *</text>
+        <text class="label">住在哪个病区 *</text>
         <picker :range="wardList" range-key="displayLabel" @change="onWardPick">
           <view class="picker-input">
-            {{ selectedWardName || '点击选择住院病区' }}
+            {{ selectedWardName || '请手动选择住院病区' }}
             <text class="arrow">▼</text>
           </view>
         </picker>
@@ -100,13 +100,20 @@
 
       <!-- 3. 床位号 (下拉选择) -->
       <view class="input-group">
-        <text class="label">床位号 (下拉选择) *</text>
+        <text class="label">几号床 *</text>
         <picker :range="bedList" range-key="displayLabel" @change="onBedPick">
           <view class="picker-input">
-            {{ selectedBedName || (bedList.length > 0 ? '点击下拉选择床位号' : '当前病区暂无空床/床位') }}
+            {{ selectedBedName || (bedList.length > 0 ? '点击下拉选择床位号' : '当前病区暂无床位') }}
             <text class="arrow">▼</text>
           </view>
         </picker>
+      </view>
+
+      <!-- 二次核对：绑定到别人的床位是最高风险操作，必须回显患者姓名 -->
+      <view class="bed-confirm" v-if="selectedBed">
+        <text class="bc-label">请核对床位患者</text>
+        <text class="bc-val">{{ selectedBed.bedNo }} · {{ selectedBed.patientName || '空床（无在院患者）' }}</text>
+        <text class="bc-hint" v-if="!selectedBed.patientName">该床位当前没有在院患者，请确认床位号是否正确</text>
       </view>
 
       <!-- 4. 住院号 (手动输入) -->
@@ -115,7 +122,7 @@
         <input class="input" v-model="patientForm.hospitalNo" placeholder="如：ZY202611001" placeholder-class="input-placeholder" />
       </view>
 
-      <view class="preset-tip">
+      <view class="preset-tip" v-if="showDemo">
         <text class="p-title">💡 提示：点击可快速填入后台在院病患测试</text>
         <text class="p-item" @tap="fillDemoPatient('李建国', 36, '1床', 'ZY202611001')">• 李建国：7#19B消化内科三病区 - 1床 (ZY202611001)</text>
         <text class="p-item" @tap="fillDemoPatient('王秀英', 36, '5床', 'ZY202611002')">• 王秀英：7#19B消化内科三病区 - 5床 (ZY202611002)</text>
@@ -135,10 +142,13 @@ import { useUserStore } from '../../stores/user'
 import { bindNurseApi, bindPatientApi } from '../../api/auth'
 import { getWardsApi } from '../../api/ward'
 import { getHospitalsApi } from '../../api/dict'
-import { getBedsByWardApi } from '../../api/bed'
+import { getBedMatrixApi } from '../../api/bed'
 import { syncRoleTabBar } from '../../utils/tabbar'
+import { SHOW_DEMO } from '../../config'
 
 const userStore = useUserStore()
+// 演示数据只在显式开启时出现，生产环境不暴露示例患者
+const showDemo = SHOW_DEMO
 const activeTab = ref('nurse')
 const loading = ref(false)
 
@@ -166,6 +176,7 @@ const wardList = ref([])
 const selectedWardName = ref('')
 const bedList = ref([])
 const selectedBedName = ref('')
+const selectedBed = ref(null)
 
 async function loadDicts() {
   try {
@@ -224,47 +235,39 @@ async function loadWards() {
       ...w,
       displayLabel: `${w.wardName}${w.building ? ' (' + w.building + ')' : ''}`
     }))
-    if (wardList.value.length > 0) {
-      // 优先默认选中 7#19B消化内科三病区 或 首个
-      const defaultWard = wardList.value.find(w => w.wardName.includes('7#19B') || w.id === 36) || wardList.value[0]
-      patientForm.value.wardId = defaultWard.id
-      selectedWardName.value = defaultWard.displayLabel
-      await loadBedsForWard(defaultWard.id)
-    }
+    // 不做任何默认选中：床位必须由用户亲自确认，避免绑到别人床位
   } catch (e) {
-    console.error(e)
+    console.error('加载病区失败', e)
+    uni.showToast({ title: '病区列表加载失败，请下拉重试', icon: 'none' })
   }
 }
 
 async function loadBedsForWard(wardId) {
   try {
-    const beds = await getBedsByWardApi(wardId)
+    // 用床位矩阵接口，能同时拿到在床患者姓名用于核对
+    const beds = await getBedMatrixApi(wardId)
     bedList.value = (beds || []).map(b => ({
-      ...b,
-      displayLabel: b.roomNo ? `${b.roomNo} - ${b.bedNo}` : b.bedNo
+      id: b.bedId,
+      bedNo: b.bedNo,
+      roomNo: b.roomNo,
+      patientId: b.patientId,
+      patientName: b.patientName,
+      status: b.status,
+      displayLabel: `${b.roomNo ? b.roomNo + ' · ' : ''}${b.bedNo}${b.patientName ? ' · ' + b.patientName : ''}`
     }))
-    if (bedList.value.length > 0) {
-      const match = bedList.value.find(b => b.bedNo === patientForm.value.bedNo || b.id === patientForm.value.bedId)
-      if (match) {
-        patientForm.value.bedNo = match.bedNo
-        patientForm.value.bedId = match.id
-        selectedBedName.value = match.displayLabel
-      } else {
-        patientForm.value.bedNo = bedList.value[0].bedNo
-        patientForm.value.bedId = bedList.value[0].id
-        selectedBedName.value = bedList.value[0].displayLabel
-      }
-    } else {
-      patientForm.value.bedNo = ''
-      patientForm.value.bedId = null
-      selectedBedName.value = ''
-    }
+    // 换病区后清空已选床位，强制重新确认
+    patientForm.value.bedNo = ''
+    patientForm.value.bedId = null
+    selectedBedName.value = ''
+    selectedBed.value = null
   } catch (e) {
     console.error('加载床位失败:', e)
     bedList.value = []
     patientForm.value.bedNo = ''
     patientForm.value.bedId = null
     selectedBedName.value = ''
+    selectedBed.value = null
+    uni.showToast({ title: '床位加载失败，请重新选择病区', icon: 'none' })
   }
 }
 
@@ -285,6 +288,7 @@ function onBedPick(e) {
     patientForm.value.bedNo = b.bedNo
     patientForm.value.bedId = b.id
     selectedBedName.value = b.displayLabel
+    selectedBed.value = b
   }
 }
 
@@ -347,7 +351,7 @@ async function handlePatientBind() {
     uni.showToast({ title: '请选择所属楼宇/病区', icon: 'none' })
     return
   }
-  if (!patientForm.value.bedNo || !patientForm.value.bedNo.trim()) {
+  if (!patientForm.value.bedNo || !patientForm.value.bedNo.trim() || !patientForm.value.bedId) {
     uni.showToast({ title: '请选择床位号', icon: 'none' })
     return
   }
@@ -355,7 +359,23 @@ async function handlePatientBind() {
     uni.showToast({ title: '请输入住院号', icon: 'none' })
     return
   }
+  if (selectedBed.value && !selectedBed.value.patientName) {
+    uni.showModal({
+      title: '床位无在院患者',
+      content: `【${selectedBed.value.bedNo}】当前没有在院患者，请确认床位号是否选错。`,
+      confirmText: '仍然继续',
+      cancelText: '重新选择',
+      success: (res) => {
+        if (res.confirm) doPatientBind()
+      }
+    })
+    return
+  }
 
+  doPatientBind()
+}
+
+async function doPatientBind() {
   loading.value = true
   try {
     const res = await bindPatientApi({
@@ -517,6 +537,33 @@ onMounted(async () => {
 .arrow {
   color: #bfbfbf;
   font-size: 22rpx;
+}
+
+.bed-confirm {
+  background: #f0f7ff;
+  border: 2rpx solid #91caff;
+  border-radius: 12rpx;
+  padding: 20rpx 24rpx;
+  margin-bottom: 30rpx;
+  display: flex;
+  flex-direction: column;
+  gap: 6rpx;
+}
+
+.bc-label {
+  font-size: 24rpx;
+  color: #0958d9;
+}
+
+.bc-val {
+  font-size: 32rpx;
+  font-weight: bold;
+  color: #1f2329;
+}
+
+.bc-hint {
+  font-size: 24rpx;
+  color: #d46b08;
 }
 
 .preset-tip {

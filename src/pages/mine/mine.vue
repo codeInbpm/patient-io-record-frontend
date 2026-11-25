@@ -25,7 +25,6 @@
         <view class="sub-info warn" v-else>
           已连接微信，未绑定临床身份
         </view>
-        <view class="openid-tip">微信OpenID: {{ formatOpenid(userStore.userInfo?.openid) }}</view>
       </view>
     </view>
 
@@ -45,7 +44,7 @@
       <button class="wechat-login-btn" type="primary" @tap="goToLogin">
         <text class="wx-icon">💬</text> 前往微信一键授权登录
       </button>
-      <text class="login-tip">系统将安全获取您的微信基础凭证以同步出入量数据</text>
+      <text class="login-tip">登录后会同步你的记录，不用重复填写</text>
     </view>
 
     <!-- 3. 身份核验与绑定状态（已登录时展示） -->
@@ -124,7 +123,7 @@
 
       <view class="menu-item" v-if="userStore.isPatient" @tap="goToPatientHome">
         <text class="m-icon">📋</text>
-        <text class="m-text">我的出入量快速填报（患者端）</text>
+        <text class="m-text">我的记录（补记喝水、排尿）</text>
         <text class="m-arrow">›</text>
       </view>
     </view>
@@ -140,7 +139,17 @@
       <view class="menu-item">
         <text class="m-icon">ℹ️</text>
         <text class="m-text">系统版本</text>
-        <text class="m-val">v2.0.0 (真实微信认证 + 三级角色体系)</text>
+        <text class="m-val">v{{ appVersion }}</text>
+      </view>
+      <view class="menu-item" @tap="openServerSetting">
+        <text class="m-icon">🌐</text>
+        <text class="m-text">服务器地址</text>
+        <text class="m-val">{{ serverHost }}</text>
+      </view>
+      <view class="menu-item" v-if="pendingCount > 0" @tap="retrySync">
+        <text class="m-icon">📶</text>
+        <text class="m-text">待同步记录</text>
+        <text class="m-val warn-val">{{ pendingCount }} 条 · 点击重试</text>
       </view>
     </view>
 
@@ -149,6 +158,19 @@
       <button class="logout-btn" @tap="handleLogout">
         🚪 退出当前微信登录
       </button>
+    </view>
+
+    <!-- 服务器地址设置（现场临时切内网用，不影响正式配置） -->
+    <view class="modal-mask" v-if="showServerModal" @tap="showServerModal = false">
+      <view class="server-modal" @tap.stop>
+        <text class="sm-title">服务器地址</text>
+        <text class="sm-desc">例如 http://192.168.1.20:8080/api，留空恢复默认</text>
+        <input class="sm-input" v-model="serverInput" placeholder="http://IP:8080/api" />
+        <view class="sm-actions">
+          <button class="sm-btn" @tap="showServerModal = false">取消</button>
+          <button class="sm-btn primary" @tap="saveServer">保存</button>
+        </view>
+      </view>
     </view>
 
     <!-- 底部角色定制导航栏 -->
@@ -359,9 +381,39 @@ import { getWardsApi } from '../../api/ward'
 import { getBedsByWardApi } from '../../api/bed'
 import { createPatientApi } from '../../api/patient'
 import { formatDate } from '../../utils/date'
+import { APP_VERSION, getBaseUrl, setBaseUrl } from '../../config'
+import { queueCount, flushQueue } from '../../utils/offline'
 import CustomTabBar from '../../components/CustomTabBar.vue'
 
 const userStore = useUserStore()
+
+const appVersion = APP_VERSION
+const showServerModal = ref(false)
+const serverInput = ref(getBaseUrl())
+const pendingCount = ref(queueCount())
+
+const serverHost = computed(() => {
+  return getBaseUrl().replace(/^https?:\/\//, '')
+})
+
+function openServerSetting() {
+  serverInput.value = getBaseUrl()
+  showServerModal.value = true
+}
+
+function saveServer() {
+  const value = serverInput.value.trim()
+  setBaseUrl(value)
+  showServerModal.value = false
+  uni.showToast({ title: value ? '已切换服务器' : '已恢复默认', icon: 'none' })
+}
+
+async function retrySync() {
+  uni.showLoading({ title: '正在补传…' })
+  await flushQueue()
+  uni.hideLoading()
+  pendingCount.value = queueCount()
+}
 const loginLoading = ref(false)
 
 // 录入住院病患档案弹窗状态与字典（与后台及工作台标准保持严格一致）
@@ -724,6 +776,7 @@ function showHelpModal() {
 
 onShow(() => {
   syncRoleTabBar()
+  pendingCount.value = queueCount()
   if (userStore.token) {
     userStore.refreshUserInfo()
   }
@@ -731,6 +784,73 @@ onShow(() => {
 </script>
 
 <style>
+.modal-mask {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+
+.server-modal {
+  width: 84%;
+  background: #ffffff;
+  border-radius: 20rpx;
+  padding: 36rpx 32rpx;
+}
+
+.sm-title {
+  font-size: 32rpx;
+  font-weight: bold;
+  color: #1f2329;
+  display: block;
+  text-align: center;
+}
+
+.sm-desc {
+  font-size: 24rpx;
+  color: #8c8c8c;
+  display: block;
+  text-align: center;
+  margin: 12rpx 0 22rpx;
+}
+
+.sm-input {
+  height: 88rpx;
+  border: 2rpx solid #d9d9d9;
+  border-radius: 12rpx;
+  padding: 0 20rpx;
+  font-size: 28rpx;
+}
+
+.sm-actions {
+  display: flex;
+  gap: 20rpx;
+  margin-top: 26rpx;
+}
+
+.sm-btn {
+  flex: 1;
+  height: 80rpx;
+  line-height: 80rpx;
+  font-size: 28rpx;
+  border-radius: 40rpx;
+  background: #f5f7fa;
+  color: #595959;
+  margin: 0;
+}
+
+.sm-btn.primary {
+  background: #1677ff;
+  color: #ffffff;
+}
+
+.warn-val {
+  color: #fa8c16 !important;
+}
+
 .container {
   padding: 24rpx;
   padding-bottom: 80rpx;

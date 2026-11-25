@@ -20,11 +20,17 @@
     <view class="top-action-bar">
       <view class="ward-title">
         <text class="ward-tag">病区</text>
-        <text class="ward-name">{{ userStore.userInfo?.wardName || '7#19B消化内科三病区' }}</text>
+        <text class="ward-name">{{ userStore.userInfo?.wardName || '当前病区' }}</text>
       </view>
       <button class="quick-add-btn" @tap="openAddModal">
         <text class="btn-icon">＋</text> 登记补液
       </button>
+    </view>
+
+    <!-- 超时红条：停在页面上也能第一时间发现 -->
+    <view class="timeout-banner" v-if="timeoutCount > 0">
+      <text class="tb-icon">🚨</text>
+      <text class="tb-text">{{ timeoutCount }} 例补液已超过预计拔针时间</text>
     </view>
 
     <!-- 列表分段切换 -->
@@ -44,9 +50,22 @@
     </view>
 
     <!-- 1. 正在滴注列表 -->
-    <view class="infusion-cards" v-if="currentTab === 'active'">
+    <StateView
+      v-if="loadState === 'loading' && activeList.length === 0"
+      state="loading"
+      :skeleton-rows="3"
+    />
+    <StateView
+      v-else-if="loadState === 'error'"
+      state="error"
+      title="补液数据加载失败"
+      desc="请检查网络后重试，页面不会丢失已有记录"
+      @retry="loadData"
+    />
+
+    <view class="infusion-cards" v-else-if="currentTab === 'active'">
       <view
-        v-for="item in activeList"
+        v-for="item in decoratedActiveList"
         :key="item.id"
         :class="['card', item.isTimeout ? 'is-timeout' : (item.remainingMinutes <= 15 ? 'is-warn' : '')]"
       >
@@ -113,7 +132,7 @@
       </view>
 
       <!-- 空状态：提供直接登记按钮 -->
-      <view class="empty-box" v-if="activeList.length === 0">
+      <view class="empty-box" v-if="decoratedActiveList.length === 0">
         <text class="empty-icon">💧</text>
         <text class="empty-title">当前病区暂无正在补液的患者</text>
         <button class="empty-add-btn" @tap="openAddModal">
@@ -367,13 +386,32 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed } from 'vue'
-import { onShow, onPullDownRefresh } from '@dcloudio/uni-app'
+import { ref, reactive, computed, onUnmounted } from 'vue'
+import { onShow, onHide, onPullDownRefresh } from '@dcloudio/uni-app'
 import { getActiveInfusionsApi, getCompletedInfusionsApi, endInfusionApi, createInfusionApi, uploadInfusionImageApi } from '../../api/infusion'
 import { getPatientsApi } from '../../api/patient'
 import { useUserStore } from '../../stores/user'
+import StateView from '../../components/StateView.vue'
 
 const userStore = useUserStore()
+const loadState = ref('loading')
+const tickNow = ref(Date.now())
+let tickTimer = null
+
+// 页面停留期间每分钟本地重算，避免「剩 3 分钟」一直不变
+function startTick() {
+  stopTick()
+  tickTimer = setInterval(() => {
+    tickNow.value = Date.now()
+  }, 30000)
+}
+
+function stopTick() {
+  if (tickTimer) {
+    clearInterval(tickTimer)
+    tickTimer = null
+  }
+}
 const currentTab = ref('active')
 const activeList = ref([])
 const todayCompletedList = ref([])
@@ -417,12 +455,50 @@ const formatDateTime = (d) => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
+function parseDateTime(str) {
+  if (!str) return null
+  const m = String(str).match(/(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/)
+  if (!m) return null
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6] || 0))
+}
+
+// 以预计拔针时间为准本地重算剩余分钟与进度，接口返回值只作为初始值
+const decoratedActiveList = computed(() => {
+  const now = tickNow.value
+  return activeList.value.map(item => {
+    const start = parseDateTime(item.startTime)
+    const end = parseDateTime(item.estimatedEndTime)
+    const remaining = end ? Math.round((end.getTime() - now) / 60000) : Number(item.remainingMinutes || 0)
+    let percent = Number(item.progressPercent || 0)
+    if (start && end && end > start) {
+      const total = end.getTime() - start.getTime()
+      const elapsed = Math.min(Math.max(now - start.getTime(), 0), total)
+      percent = Math.round((elapsed / total) * 100)
+    }
+    return {
+      ...item,
+      remainingMinutes: remaining,
+      isTimeout: remaining < 0,
+      progressPercent: percent
+    }
+  })
+})
+
 const timeoutCount = computed(() => {
-  return activeList.value.filter(item => item.isTimeout).length
+  return decoratedActiveList.value.filter(item => item.isTimeout).length
 })
 
 onShow(() => {
+  startTick()
   loadData()
+})
+
+onHide(() => {
+  stopTick()
+})
+
+onUnmounted(() => {
+  stopTick()
 })
 
 onPullDownRefresh(async () => {
@@ -431,8 +507,15 @@ onPullDownRefresh(async () => {
 })
 
 const loadData = async () => {
+  const wardId = userStore.userInfo?.wardId
+  if (!wardId) {
+    loadState.value = 'error'
+    return
+  }
+  if (activeList.value.length === 0 && todayCompletedList.value.length === 0) {
+    loadState.value = 'loading'
+  }
   try {
-    const wardId = userStore.userInfo?.wardId || 36
     const [activeRes, completedRes, patientsRes] = await Promise.all([
       getActiveInfusionsApi(wardId),
       getCompletedInfusionsApi(wardId),
@@ -441,7 +524,14 @@ const loadData = async () => {
     activeList.value = activeRes || []
     todayCompletedList.value = completedRes || []
     inBedPatients.value = (patientsRes || []).filter(p => p.status === 1)
-  } catch (e) {}
+    tickNow.value = Date.now()
+    loadState.value = 'ready'
+  } catch (e) {
+    console.error('加载补液数据失败', e)
+    if (activeList.value.length === 0) {
+      loadState.value = 'error'
+    }
+  }
 }
 
 const previewImg = (img, list) => {
@@ -638,6 +728,27 @@ const submitAddInfusion = async () => {
   min-height: 100vh;
   box-sizing: border-box;
   padding-bottom: 120rpx;
+}
+
+.timeout-banner {
+  display: flex;
+  align-items: center;
+  background: #fff1f0;
+  border: 1px solid #ffa39e;
+  border-radius: 12rpx;
+  padding: 16rpx 20rpx;
+  margin: 0 0 16rpx 0;
+}
+
+.tb-icon {
+  font-size: 30rpx;
+  margin-right: 10rpx;
+}
+
+.tb-text {
+  font-size: 28rpx;
+  color: #cf1322;
+  font-weight: bold;
 }
 
 .summary-card {

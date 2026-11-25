@@ -54,7 +54,7 @@ const nurseTabs = [
 const patientTabs = [
   {
     key: 'patient',
-    text: '患者端',
+    text: '记录',
     path: '/pages/patient-view/home',
     icon: '/static/tabbar/tab-patient.png',
     selectedIcon: '/static/tabbar/tab-patient-active.png'
@@ -118,7 +118,7 @@ function handleSwitch(item) {
 }
 
 .tabbar-label {
-  font-size: 20rpx;
+  font-size: 22rpx;
   color: #8c8c8c;
   line-height: 1.2;
 }

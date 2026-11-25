@@ -19,6 +19,7 @@ export function createWardApi(data) {
 export function getWardOverviewApi(wardId) {
   return request({
     url: `/v1/wards/${wardId}/overview`,
-    method: 'GET'
+    method: 'GET',
+    silent: true // 失败态由页面统一展示，避免重复弹提示
   })
 }

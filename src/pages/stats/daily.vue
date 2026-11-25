@@ -36,6 +36,18 @@
           </view>
         </view>
 
+        <!-- 护士默认只看「我负责」，避免一进来就是全病区几十人 -->
+        <view class="scope-row" v-if="!userStore.isPatient && !userStore.isHeadNurse">
+          <text
+            :class="['scope-chip', scopeMode === 'my' ? 'active' : '']"
+            @tap="setScope('my')"
+          >我负责 ({{ myPatientCount }})</text>
+          <text
+            :class="['scope-chip', scopeMode === 'all' ? 'active' : '']"
+            @tap="setScope('all')"
+          >全病区 ({{ patientCandidates.length }})</text>
+        </view>
+
         <!-- 2) 时间周期快捷与范围选择 -->
         <view class="time-section">
           <view class="segmented-control">
@@ -177,6 +189,19 @@
         </view>
       </view>
 
+      <StateView
+        v-if="loading && !queryResult"
+        state="loading"
+        :skeleton-rows="3"
+      />
+      <StateView
+        v-else-if="queryError && !queryResult"
+        state="error"
+        title="统计数据加载失败"
+        desc="可能是网络不稳或查询超时，请重试"
+        @retry="handleSearch"
+      />
+
       <!-- 核心指标统计卡片 -->
       <view class="stat-card" v-if="queryResult">
         <view class="card-top-title">
@@ -244,82 +269,51 @@
           </view>
         </view>
 
-        <view class="sum-table">
-          <view class="sum-th-row">
-            <text class="th col-p">病患/床号</text>
-            <text class="th col-in">入量</text>
-            <text class="th col-out">出量</text>
-            <text class="th col-net">净差值</text>
-            <text class="th col-warn">状态</text>
-          </view>
-          <view 
-            class="sum-tr-row" 
-            v-for="p in pagedPatientSummaries" 
+        <!-- 病患汇总：一屏一行，床号姓名 + 三个数字 + 状态，手机上不挤 -->
+        <view class="sum-cards">
+          <view
+            class="sum-item"
+            v-for="p in pagedPatientSummaries"
             :key="p.patientId"
             @tap="goToPatientDetail(p.patientId)"
           >
-            <view class="td col-p">
+            <view class="si-top">
               <text class="bed-tag">{{ p.bedNo }}</text>
-              <text class="p-name">{{ p.patientName }}</text>
+              <text class="si-name">{{ p.patientName }}</text>
+              <text :class="['si-status', statusClass(p)]">{{ statusText(p) }}</text>
             </view>
-            <!-- 静脉输液>3000ml 标黄 -->
-            <view :class="['td', 'col-in', 'in-num', p.isIvAlert ? 'bg-alert-yellow' : '']">
-              <text>{{ p.totalIntake }}</text>
-              <text v-if="p.isIvAlert" class="badge-mini-yellow">输液＞3000</text>
+            <view class="si-nums">
+              <view class="si-num">
+                <text class="si-label">入</text>
+                <text class="si-val in">{{ p.totalIntake }}</text>
+              </view>
+              <view class="si-num">
+                <text class="si-label">出</text>
+                <text class="si-val out">{{ p.totalOutput }}</text>
+              </view>
+              <view class="si-num">
+                <text class="si-label">净</text>
+                <text :class="['si-val', p.netBalance >= 0 ? 'pos' : 'neg']">
+                  {{ p.netBalance > 0 ? '+' : '' }}{{ p.netBalance }}
+                </text>
+              </view>
             </view>
-            <!-- 24h尿量<400ml 标红 -->
-            <view :class="['td', 'col-out', 'out-num', p.isUrineAlert ? 'bg-alert-red' : '']">
-              <text>{{ p.totalOutput }}</text>
-              <text v-if="p.isUrineAlert" class="badge-mini-red">尿量＜400</text>
-            </view>
-            <!-- 入量-出量差值>1000ml 标红 -->
-            <view :class="['td', 'col-net', p.isBalanceAlert ? 'bg-alert-red alert-red-text' : (p.netBalance >= 0 ? 'pos' : 'neg')]">
-              <text>{{ p.netBalance > 0 ? '+' : '' }}{{ p.netBalance }}</text>
-              <text v-if="p.isBalanceAlert" class="badge-mini-red">差值＞1000</text>
-            </view>
-            <view class="td col-warn">
-              <text v-if="p.isUrineAlert" class="alert-pill pill-red">少尿</text>
-              <text v-else-if="p.isBalanceAlert" class="alert-pill pill-red">差值高</text>
-              <text v-else-if="p.isIvAlert" class="alert-pill pill-yellow">输液高</text>
-              <text v-else class="alert-pill pill-normal">正常</text>
+            <view class="si-alert" v-if="statusText(p) !== '正常'">
+              {{ alertReason(p) }}
             </view>
           </view>
 
-          <!-- 空状态 -->
-          <view class="table-empty-row" v-if="pagedPatientSummaries.length === 0">
-            <text class="table-empty-text">未找到匹配的病患汇总数据</text>
+          <view class="sum-empty" v-if="pagedPatientSummaries.length === 0">
+            未找到匹配的病患汇总数据
           </view>
         </view>
 
-        <!-- 平衡汇总分页器 -->
-        <view class="pagination-container" v-if="filteredPatientSummaries.length > 0">
-          <view class="page-size-selector">
-            <text class="page-size-label">每页:</text>
-            <text 
-              :class="['page-size-chip', summaryPageSize === 6 ? 'active' : '']" 
-              @tap="setSummaryPageSize(6)"
-            >6</text>
-            <text 
-              :class="['page-size-chip', summaryPageSize === 10 ? 'active' : '']" 
-              @tap="setSummaryPageSize(10)"
-            >10</text>
-          </view>
-
-          <view class="page-nav-group">
-            <button 
-              class="page-nav-btn" 
-              size="mini" 
-              :disabled="summaryCurrentPage <= 1"
-              @tap="changeSummaryPage(-1)"
-            >上一页</button>
-            <text class="page-indicator">{{ summaryCurrentPage }} / {{ summaryTotalPages }}</text>
-            <button 
-              class="page-nav-btn" 
-              size="mini" 
-              :disabled="summaryCurrentPage >= summaryTotalPages"
-              @tap="changeSummaryPage(1)"
-            >下一页</button>
-          </view>
+        <!-- 加载更多，替代上一页/下一页翻页 -->
+        <view class="load-more" v-if="hasMoreSummaries" @tap="loadMoreSummary">
+          加载更多（已显示 {{ pagedPatientSummaries.length }} / {{ filteredPatientSummaries.length }} 人）
+        </view>
+        <view class="load-end" v-else-if="filteredPatientSummaries.length > 0">
+          已显示全部 {{ filteredPatientSummaries.length }} 人
         </view>
       </view>
 
@@ -331,7 +325,7 @@
               <text class="card-title">出入量明细流水</text>
               <text class="badge-count">({{ filteredRecords.length }}条)</text>
             </view>
-            <text class="hint-text">点击可查看/核对具体录入人</text>
+            <text class="hint-text">点击任一条可进入该患者详情</text>
           </view>
 
           <!-- 2) 明细流水快捷模糊筛选框（病患姓名/床号/品名/录入人） -->
@@ -353,6 +347,7 @@
             :class="['record-item', item.alertLevel === 'red' ? 'item-alert-red' : (item.alertLevel === 'yellow' ? 'item-alert-yellow' : '')]" 
             v-for="item in pagedRecords" 
             :key="item.category + item.id"
+            @tap="item.patientId && goToPatientDetail(item.patientId)"
           >
             <view class="r-left">
               <text :class="['badge-cat', item.category.toLowerCase()]">
@@ -508,12 +503,13 @@ import { queryFluidRecordsApi, exportFluidRecordsExcel } from '../../api/record'
 import { formatDate } from '../../utils/date'
 import { syncRoleTabBar } from '../../utils/tabbar'
 import CustomTabBar from '../../components/CustomTabBar.vue'
+import StateView from '../../components/StateView.vue'
 
 const userStore = useUserStore()
 
 // 筛选状态
-const activeDateRange = ref('7days') // today, 3days, 7days, 30days, custom
-const startDate = ref(formatDate(new Date(Date.now() - 6 * 24 * 3600 * 1000)))
+const activeDateRange = ref('today') // 默认今日，首屏更快、更贴合交班场景
+const startDate = ref(formatDate())
 const endDate = ref(formatDate())
 const filterCategory = ref('ALL') // ALL, INTAKE, OUTPUT
 const filterRecorderRole = ref('ALL') // ALL, NURSE, PATIENT
@@ -530,10 +526,16 @@ const showPatientModal = ref(false)
 // 查询结果与加载
 const loading = ref(false)
 const queryResult = ref(null)
+const queryError = ref(false)
+const scopeMode = ref('my') // my-我负责, all-全病区
+
+const myPatientCount = computed(() => {
+  return patientCandidates.value.filter(p => p.isMyDuty).length
+})
 
 // 平衡汇总快捷搜索与分页
 const summaryPatientKeyword = ref('')
-const summaryPageSize = ref(6) // 默认每页6人
+const summaryPageSize = ref(20) // 每次展示 20 人，超出用「加载更多」，不再翻页
 const summaryCurrentPage = ref(1)
 
 // 出入量明细快捷搜索与分页
@@ -595,10 +597,39 @@ const summaryTotalPages = computed(() => {
   return Math.ceil(filteredPatientSummaries.value.length / summaryPageSize.value) || 1
 })
 
+// 累积展示：点「加载更多」只增加数量，不跳页
 const pagedPatientSummaries = computed(() => {
-  const start = (summaryCurrentPage.value - 1) * summaryPageSize.value
-  return filteredPatientSummaries.value.slice(start, start + summaryPageSize.value)
+  return filteredPatientSummaries.value.slice(0, summaryCurrentPage.value * summaryPageSize.value)
 })
+
+const hasMoreSummaries = computed(() => {
+  return filteredPatientSummaries.value.length > pagedPatientSummaries.value.length
+})
+
+function loadMoreSummary() {
+  summaryCurrentPage.value += 1
+}
+
+function statusText(p) {
+  if (p.isUrineAlert) return '少尿'
+  if (p.isBalanceAlert) return '差值高'
+  if (p.isIvAlert) return '输液高'
+  return '正常'
+}
+
+function statusClass(p) {
+  if (p.isUrineAlert || p.isBalanceAlert) return 'st-red'
+  if (p.isIvAlert) return 'st-yellow'
+  return 'st-normal'
+}
+
+function alertReason(p) {
+  const list = []
+  if (p.isUrineAlert) list.push('24h 尿量 ＜400ml')
+  if (p.isBalanceAlert) list.push('净差值 ＞1000ml')
+  if (p.isIvAlert) list.push('静脉输液 ＞3000ml')
+  return list.join(' · ')
+}
 
 const filteredRecords = computed(() => {
   if (!queryResult.value || !queryResult.value.records) return []
@@ -798,10 +829,22 @@ function confirmPatientSelection() {
   handleSearch()
 }
 
+function setScope(mode) {
+  scopeMode.value = mode
+  if (mode === 'my') {
+    selectedPatientIds.value = patientCandidates.value.filter(p => p.isMyDuty).map(p => p.id)
+  } else {
+    selectedPatientIds.value = []
+  }
+  summaryCurrentPage.value = 1
+  handleSearch()
+}
+
 async function handleSearch() {
   if (!userStore.token || !userStore.isBound) return
 
   loading.value = true
+  queryError.value = false
   try {
     const params = {
       startDate: startDate.value,
@@ -819,17 +862,21 @@ async function handleSearch() {
 
     const res = await queryFluidRecordsApi(params)
     queryResult.value = res
+    queryError.value = false
     summaryCurrentPage.value = 1
     recordCurrentPage.value = 1
   } catch (e) {
     console.error('查询出入量失败', e)
+    if (!queryResult.value) {
+      queryError.value = true
+    }
   } finally {
     loading.value = false
   }
 }
 
 function handleReset() {
-  setDateRangePreset('7days')
+  setDateRangePreset('today')
   filterCategory.value = 'ALL'
   filterRecorderRole.value = 'ALL'
   filterAlertStatus.value = 'ALL'
@@ -874,6 +921,13 @@ async function initPage() {
     // 护士长或护士：不做限制，获取全部病区病患
     const pts = await getPatientsByWardApi(null, false)
     patientCandidates.value = pts || []
+    if (userStore.isHeadNurse) {
+      scopeMode.value = 'all'
+    } else {
+      const mine = patientCandidates.value.filter(p => p.isMyDuty).map(p => p.id)
+      scopeMode.value = mine.length > 0 ? 'my' : 'all'
+      selectedPatientIds.value = mine
+    }
   }
   handleSearch()
 }
@@ -1347,6 +1401,140 @@ onShow(() => {
   font-size: 28rpx;
   font-weight: bold;
   color: #1a1a1a;
+}
+
+.sum-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 16rpx;
+}
+
+.sum-item {
+  background: #fafbfc;
+  border: 1rpx solid #eef0f4;
+  border-radius: 14rpx;
+  padding: 20rpx 22rpx;
+}
+
+.si-top {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12rpx;
+}
+
+.si-name {
+  font-size: 30rpx;
+  font-weight: bold;
+  color: #1f2329;
+  flex: 1;
+}
+
+.si-status {
+  font-size: 22rpx;
+  padding: 4rpx 14rpx;
+  border-radius: 20rpx;
+  font-weight: 500;
+}
+
+.si-status.st-normal {
+  background: #f6ffed;
+  color: #389e0d;
+}
+
+.si-status.st-red {
+  background: #fff1f0;
+  color: #cf1322;
+}
+
+.si-status.st-yellow {
+  background: #fffbe6;
+  color: #ad6800;
+}
+
+.si-nums {
+  display: flex;
+  gap: 12rpx;
+}
+
+.si-num {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  background: #ffffff;
+  border-radius: 10rpx;
+  padding: 10rpx 14rpx;
+}
+
+.si-label {
+  font-size: 24rpx;
+  color: #8c8c8c;
+  margin-right: 8rpx;
+}
+
+.si-val {
+  font-size: 32rpx;
+  font-weight: bold;
+  color: #1f2329;
+}
+
+.si-val.in { color: #389e0d; }
+.si-val.out { color: #d46b08; }
+.si-val.pos { color: #1677ff; }
+.si-val.neg { color: #eb2f96; }
+
+.si-alert {
+  margin-top: 10rpx;
+  font-size: 24rpx;
+  color: #cf1322;
+  background: #fff1f0;
+  border-radius: 8rpx;
+  padding: 8rpx 14rpx;
+}
+
+.sum-empty {
+  padding: 60rpx 0;
+  text-align: center;
+  font-size: 26rpx;
+  color: #bfbfbf;
+}
+
+.scope-row {
+  display: flex;
+  gap: 12rpx;
+  margin: -6rpx 0 18rpx 0;
+}
+
+.scope-chip {
+  font-size: 26rpx;
+  color: #595959;
+  background: #f5f7fa;
+  border: 1rpx solid #e5e9f0;
+  border-radius: 30rpx;
+  padding: 10rpx 26rpx;
+}
+
+.scope-chip.active {
+  background: #1677ff;
+  border-color: #1677ff;
+  color: #ffffff;
+  font-weight: bold;
+}
+
+.load-more {
+  margin-top: 20rpx;
+  text-align: center;
+  font-size: 28rpx;
+  color: #1677ff;
+  background: #f0f7ff;
+  border-radius: 40rpx;
+  padding: 18rpx 0;
+}
+
+.load-end {
+  margin-top: 20rpx;
+  text-align: center;
+  font-size: 24rpx;
+  color: #bfbfbf;
 }
 
 .sum-table {
