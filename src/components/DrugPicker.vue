@@ -9,7 +9,18 @@
       >
         <view class="chip-body">
           <text class="chip-name">{{ d.name }}</text>
-          <text class="chip-spec" v-if="d.spec">{{ d.spec }}</text>
+          <text class="chip-spec" v-if="d.spec">规格 {{ d.spec }}</text>
+          <view class="chip-dose-row">
+            <input
+              class="chip-dose-input"
+              type="digit"
+              :value="d.dose || ''"
+              :placeholder="d.highAlert === 1 ? '用量必填' : '用量'"
+              placeholder-class="chip-dose-ph"
+              @input="onDoseInput(i, $event)"
+            />
+            <text class="chip-dose-unit" v-if="d.unit">{{ d.unit }}</text>
+          </view>
           <text class="chip-flag" v-if="d.highAlert === 1">高警示</text>
           <text class="chip-flag manual" v-if="d.manual">未入库·仅本次</text>
         </view>
@@ -236,7 +247,10 @@ async function choose(item, viaAdd = false) {
         id: item.id || null,
         name: item.genericName,
         spec,
+        // 用量默认带出字典默认剂量，护士可改；没有就留空
+        dose: item.defaultDose ? String(item.defaultDose) : '',
         unit: item.unit || '',
+        route: item.route || props.route || '',
         highAlert: item.highAlert || 0,
         manual: false
       }
@@ -306,6 +320,15 @@ async function submitAdd() {
 function removeAt(index) {
   const list = drugs.value.slice()
   list.splice(index, 1)
+  sync(list)
+}
+
+// 用量逐条录入：不改原对象，复制后替换，避免直接改父级 props
+function onDoseInput(index, e) {
+  const val = e && e.detail ? e.detail.value : ''
+  const list = drugs.value.slice()
+  if (!list[index]) return
+  list[index] = { ...list[index], dose: val }
   sync(list)
 }
 
@@ -396,6 +419,41 @@ function confirmDialog(title, content, confirmText) {
   font-size: 22rpx;
   color: #595959;
   margin-top: 2rpx;
+}
+
+.chip-dose-row {
+  display: flex;
+  align-items: center;
+  margin-top: 8rpx;
+}
+
+.chip-dose-input {
+  width: 150rpx;
+  height: 42rpx;
+  min-height: 42rpx;
+  line-height: 42rpx;
+  font-size: 22rpx;
+  color: #262626;
+  background: #ffffff;
+  border: 1rpx solid #d9d9d9;
+  border-radius: 6rpx;
+  padding: 0 8rpx;
+  box-sizing: border-box;
+}
+
+.chip-danger .chip-dose-input {
+  border-color: #ffa39e;
+}
+
+.chip-dose-unit {
+  font-size: 20rpx;
+  color: #8c8c8c;
+  margin-left: 6rpx;
+}
+
+.chip-dose-ph {
+  color: #bfbfbf;
+  font-size: 20rpx;
 }
 
 .chip-flag {

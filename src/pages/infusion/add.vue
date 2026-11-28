@@ -9,34 +9,37 @@
     </view>
 
     <view class="form-card">
-      <!-- 补液容量 -->
+      <!-- 补液药物：先定药，再定量；从字典选择，避免手打错字 -->
       <view class="form-item">
-        <view class="item-label"><text class="required">*</text>补液容量 (ml)</view>
-        <view class="preset-chips">
-          <view
-            v-for="cap in [100, 250, 500, 1000]"
-            :key="cap"
-            :class="['chip', form.capacity === cap ? 'active' : '']"
-            @tap="selectCapacity(cap)"
-          >
-            {{ cap }} ml
-          </view>
-          <view
-            :class="['chip', isCustomCapacity ? 'active' : '']"
-            @tap="isCustomCapacity = true"
-          >
-            自定义
-          </view>
+        <view class="item-label">
+          <text class="required">*</text>补液药物
+          <text class="sub-label">从字典选择，支持拼音首字母</text>
         </view>
-        <view class="custom-input-wrap" v-if="isCustomCapacity">
-          <input
-            type="number"
-            class="input-box"
-            v-model="form.capacity"
-            placeholder="输入毫升数 (如 150)"
-            @input="autoCalcEndTime"
-          />
-          <text class="unit">ml</text>
+        <DrugPicker v-model="form.drugs" :max="5" :route="form.usageType" />
+
+        <!-- 一条记录 = 一袋：容量和 ml 用量是同一个数，可手填也可点选 -->
+        <view class="cap-line" v-if="form.drugs.length">
+          <view class="cap-line-head">
+            <text class="cap-line-label">本袋容量</text>
+            <view class="cap-input-wrap">
+              <input
+                type="number"
+                class="cap-input"
+                :value="capText"
+                @input="onCapacityInput"
+              />
+              <text class="cap-unit">ml</text>
+            </view>
+            <text class="cap-line-tip">{{ bagCapacity ? '计入今日入量' : '这袋给多少填这里' }}</text>
+          </view>
+          <view class="cap-chips">
+            <view
+              v-for="cap in [100, 250, 500, 1000]"
+              :key="cap"
+              :class="['cap-chip', Number(form.capacity) === cap ? 'active' : '']"
+              @tap="setCapacity(cap)"
+            >{{ cap }}</view>
+          </view>
         </view>
       </view>
 
@@ -101,15 +104,6 @@
         <text class="checkbox-text">自动记入今日入量 (静脉补液: {{ form.capacity || 0 }}ml)</text>
       </view>
 
-      <!-- 补液药物：从字典选择，避免手打错字 -->
-      <view class="form-item">
-        <view class="item-label">
-          <text class="required">*</text>补液药物
-          <text class="sub-label">从字典选择，支持拼音首字母</text>
-        </view>
-        <DrugPicker v-model="form.drugs" :max="5" :route="form.usageType" />
-      </view>
-
       <!-- 备注：滴速等补充说明 -->
       <view class="form-item">
         <view class="item-label">备注（可选）</view>
@@ -149,7 +143,7 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed, watch } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { createInfusionApi, uploadInfusionImageApi } from '../../api/infusion'
 import { getPatientDetailApi } from '../../api/patient'
@@ -157,7 +151,6 @@ import DrugPicker from '../../components/DrugPicker.vue'
 
 const patientInfo = ref(null)
 const submitting = ref(false)
-const isCustomCapacity = ref(false)
 const isCustomUsage = ref(false)
 const customUsageInput = ref('')
 
@@ -192,9 +185,17 @@ onLoad((options) => {
   if (!options.patientId) {
     uni.showModal({
       title: '无法登记',
-      content: '未获取到患者信息，请返回工作台重新进入。',
+      content: '未获取到患者信息。请从工作台的患者卡片点「登记补液」进入，或在开发者工具给本页配置启动参数 patientId。',
       showCancel: false,
-      success: () => uni.navigateBack()
+      success: () => {
+        // 直接以本页为启动页时没有页面栈，navigateBack 会失败并卡死在白屏
+        const stack = typeof getCurrentPages === 'function' ? getCurrentPages() : []
+        if (stack.length > 1) {
+          uni.navigateBack()
+        } else {
+          uni.reLaunch({ url: '/pages/index/index' })
+        }
+      }
     })
     return
   }
@@ -235,10 +236,68 @@ const loadPatient = async (id) => {
   } catch (e) {}
 }
 
-const selectCapacity = (cap) => {
-  isCustomCapacity.value = false
-  form.capacity = cap
+// 本袋容量 = 溶媒的用量（多药取最大）。一条记录一袋。
+// 规格 ≤ 20ml 的 ml 药（氯化钾 10ml 这类）算添加药，不参与容量计算。
+const ADDITIVE_SPEC_ML = 20
+
+const isMlUnit = (d) => {
+  const unit = String(d.unit || '').toLowerCase()
+  if (unit === 'ml' || unit === '毫升') return true
+  return !unit && /ml|毫升/i.test(String(d.spec || ''))
+}
+
+const specMl = (spec) => {
+  const m = String(spec || '').match(/(\d+(?:\.\d+)?)\s*(毫升|ml|mL|ML|L)/)
+  if (!m) return 0
+  const v = parseFloat(m[1])
+  if (!v) return 0
+  return m[2].toLowerCase() === 'l' ? v * 1000 : v
+}
+
+// 溶媒：包装规格 > 20ml（规格没写 ml 的按非溶媒处理，容量交给人填）
+const isSolvent = (d) => specMl(d.spec) > ADDITIVE_SPEC_ML
+
+// 这一味药实际给了多少 ml：单位是 ml 就直接取用量，单位是袋/瓶/支就 用量 × 包装容量
+const drugVolume = (d) => {
+  const dose = Number(String(d.dose || '').replace(/[^\d.]/g, ''))
+  if (!dose) return 0
+  if (isMlUnit(d)) return dose
+  const pack = specMl(d.spec)
+  return pack ? dose * pack : 0
+}
+
+const bagCapacity = computed(() => {
+  let max = 0
+  ;(form.drugs || []).forEach((d) => {
+    if (!isSolvent(d)) return
+    const v = drugVolume(d)
+    if (v > max) max = v
+  })
+  return max
+})
+
+// 用量一改，容量跟着走；这样不会出现「用量填 300、存下来 250」
+watch(bagCapacity, (v) => {
+  if (v > 0) form.capacity = v
+})
+
+const capText = computed(() => (form.capacity ? String(form.capacity) : ''))
+
+// 手填或点选都走这里：容量写回 form.capacity，同时回写到 ml 那味药的用量，
+// 保证「用量」和「容量」永远是同一个数。
+const setCapacity = (v) => {
+  const n = Number(v) || 0
+  form.capacity = n
+  const solvents = (form.drugs || []).filter((d) => isSolvent(d))
+  const target = solvents.sort((a, b) => drugVolume(b) - drugVolume(a))[0]
+  // 只有用量本身就是 ml 的药才回写，按袋/支计量的不换算，避免把「1 袋」写成「500」
+  if (target && isMlUnit(target)) target.dose = String(n)
   autoCalcEndTime()
+}
+
+const onCapacityInput = (e) => {
+  const raw = e?.detail?.value
+  setCapacity(raw === undefined ? form.capacity : raw)
 }
 
 const selectUsage = (u) => {
@@ -336,8 +395,8 @@ const previewImg = (img) => {
 }
 
 const handleSubmit = async () => {
-  if (!form.capacity || form.capacity <= 0) {
-    uni.showToast({ title: '请填写有效补液容量', icon: 'none' })
+  if (!bagCapacity.value && !(form.capacity > 0)) {
+    uni.showToast({ title: '请填这袋的容量（药品用量里填 ml 数）', icon: 'none' })
     return
   }
   if (!form.usageType) {
@@ -348,16 +407,25 @@ const handleSubmit = async () => {
     uni.showToast({ title: '请从字典选择补液药物', icon: 'none' })
     return
   }
+  // 只有高警示药强制用量，普通溶媒不强填，避免为了过校验乱填
+  const missingDose = form.drugs.find((d) => d.highAlert === 1 && !String(d.dose || '').trim())
+  if (missingDose) {
+    uni.showToast({ title: `高警示药品「${missingDose.name}」必须填写用量`, icon: 'none' })
+    return
+  }
 
   submitting.value = true
   try {
     const payload = {
       ...form,
+      capacity: Number(bagCapacity.value || form.capacity || 0),
       drugs: form.drugs.map((d) => ({
         id: d.id || null,
         name: d.name,
         spec: d.spec || '',
+        dose: String(d.dose || '').trim(),
         unit: d.unit || '',
+        route: d.route || form.usageType || '',
         highAlert: d.highAlert || 0,
         manual: !!d.manual
       })),
@@ -474,6 +542,81 @@ const handleSubmit = async () => {
   color: #1677ff;
   border-color: #1677ff;
   font-weight: bold;
+}
+
+.cap-line {
+  margin-top: 16rpx;
+  padding: 20rpx 24rpx;
+  background: #f7f9fc;
+  border-radius: 14rpx;
+}
+
+.cap-line-head {
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+}
+
+.cap-line-label {
+  font-size: 26rpx;
+  color: #595959;
+  flex-shrink: 0;
+}
+
+.cap-input-wrap {
+  display: flex;
+  align-items: center;
+  height: 64rpx;
+  padding: 0 16rpx;
+  background: #fff;
+  border: 2rpx solid #d9d9d9;
+  border-radius: 10rpx;
+}
+
+.cap-input {
+  width: 130rpx;
+  height: 64rpx;
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #1677ff;
+  text-align: center;
+}
+
+.cap-unit {
+  font-size: 24rpx;
+  color: #8c8c8c;
+}
+
+.cap-line-tip {
+  flex: 1;
+  text-align: right;
+  font-size: 22rpx;
+  color: #8c8c8c;
+}
+
+.cap-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+  margin-top: 16rpx;
+}
+
+.cap-chip {
+  padding: 0 26rpx;
+  height: 56rpx;
+  line-height: 56rpx;
+  border-radius: 28rpx;
+  background: #fff;
+  border: 2rpx solid #e5e6eb;
+  font-size: 24rpx;
+  color: #595959;
+}
+
+.cap-chip.active {
+  border-color: #1677ff;
+  background: #e8f1ff;
+  color: #1677ff;
+  font-weight: 600;
 }
 
 .custom-input-wrap {
