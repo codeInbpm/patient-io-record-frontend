@@ -107,6 +107,14 @@
         <text class="m-arrow">›</text>
       </view>
 
+      <!-- 交班接班签名：PC 提交交班 → 接班护士在此核对并手写签名 -->
+      <view class="menu-item" v-if="userStore.isHeadNurse || userStore.isNurse" @tap="goToShiftReceive">
+        <text class="m-icon">🖊️</text>
+        <text class="m-text">接班确认与电子签名</text>
+        <text class="m-sub">核对交班内容 / 手写签名接班</text>
+        <text class="m-arrow">›</text>
+      </view>
+
       <!-- 患者补液监护管理（责任护士 / 护士长） -->
       <view class="menu-item" v-if="userStore.isHeadNurse || userStore.isNurse" @tap="goToInfusion">
         <text class="m-icon">💧</text>
@@ -748,6 +756,10 @@ function goToSpecialHandover() {
 
 function goToHandoverHistory() {
   uni.navigateTo({ url: '/pages/handover/history' })
+}
+
+function goToShiftReceive() {
+  uni.navigateTo({ url: '/pages/handover/receive' })
 }
 
 function goToInfusion() {

@@ -67,6 +67,11 @@
           <text class="capsule-icon">📋</text>
           <text class="capsule-text">特殊交接本</text>
         </view>
+        <view class="feature-capsule sign" @tap="goToShiftReceive">
+          <text class="capsule-icon">🖊️</text>
+          <text class="capsule-text">接班签名</text>
+          <text class="capsule-badge" v-if="pendingHandoverCount > 0">{{ pendingHandoverCount }}</text>
+        </view>
       </view>
     </view>
 
@@ -661,6 +666,7 @@ import { getPatientsApi, createPatientApi, assignNurseApi, dischargePatientApi }
 import { getActiveNursesApi } from '../../api/auth'
 import { getMyAssignmentsApi, claimMyDutyBedsApi } from '../../api/nurse'
 import { getCorrectionRequestsApi, handleCorrectionRequestApi, rejectCorrectionRequestApi } from '../../api/record'
+import { getShiftHandoverPendingApi } from '../../api/handover'
 import { formatDate, formatSinceLastRecord } from '../../utils/date'
 import { syncRoleTabBar } from '../../utils/tabbar'
 import { queueCount, flushQueue } from '../../utils/offline'
@@ -669,6 +675,8 @@ import StateView from '../../components/StateView.vue'
 
 const userStore = useUserStore()
 const wardList = ref([])
+// 交班工作台提交后，护士要在小程序端签名接班；首页给一个带角标的入口
+const pendingHandoverCount = ref(0)
 const currentWard = ref(null)
 const overview = ref(null)
 const patientList = ref([])
@@ -1080,6 +1088,7 @@ async function loadWardData(wardId) {
     patientList.value = data.patients || []
     loadState.value = 'ready'
     loadCorrections(wardId)
+    loadPendingHandover(wardId)
   } catch (e) {
     console.error(e)
     // 只有首次加载（还没有任何数据）才整页报错，刷新失败保留旧数据
@@ -1087,6 +1096,24 @@ async function loadWardData(wardId) {
       loadState.value = 'error'
     }
   }
+}
+
+async function loadPendingHandover(wardId) {
+  if (!wardId || userStore.isPatient) return
+  try {
+    const res = await getShiftHandoverPendingApi(wardId)
+    const items = (res && res.items) || []
+    pendingHandoverCount.value = items.filter((i) => i.status === 'SUBMITTED').length
+  } catch (e) {
+    // 角标失败不影响主流程
+    pendingHandoverCount.value = 0
+  }
+}
+
+function goToShiftReceive() {
+  uni.navigateTo({
+    url: '/pages/handover/receive'
+  })
 }
 
 function reloadCurrentWard() {
@@ -2020,6 +2047,7 @@ onPullDownRefresh(async () => {
 }
 
 .feature-capsule {
+  position: relative;
   flex: 1;
   display: flex;
   align-items: center;
@@ -2027,6 +2055,26 @@ onPullDownRefresh(async () => {
   background: rgba(255, 255, 255, 0.2);
   border-radius: 30rpx;
   padding: 10rpx 0;
+}
+
+.feature-capsule.sign {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.capsule-badge {
+  position: absolute;
+  top: -10rpx;
+  right: 4rpx;
+  min-width: 30rpx;
+  height: 30rpx;
+  padding: 0 8rpx;
+  border-radius: 15rpx;
+  background: #ff4d4f;
+  color: #ffffff;
+  font-size: 20rpx;
+  line-height: 30rpx;
+  text-align: center;
+  font-weight: 600;
 }
 
 .feature-capsule.handover {
